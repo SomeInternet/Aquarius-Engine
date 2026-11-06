@@ -1,0 +1,10 @@
+# Build output
+build/
+out/
+models/
+# Visual Studio
+.vs/
+*.user
+CMakeUserPresets.json
+# Claude Code local settings
+.claude/settings.local.json
