@@ -6,8 +6,8 @@ Aquarius Engine
 T Fong `SomeInternet`  
 [Website](https://tzfong.com/), [LinkedIn](https://www.linkedin.com/in/tzfong/)
 
-Jimin Choi `GitHub username here`  
-[Website](), [LinkedIn]()
+Jimin Choi `saordoe`  
+[Website](), [LinkedIn](https://linkedin.com/in/jiminchoi4)
 
 Kevin Du `Github username here`  
 [Website](), [LinkedIn]()
