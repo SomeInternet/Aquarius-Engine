@@ -115,6 +115,8 @@ set(AQUARIUS_SLANG_FLAGS
     -fvk-use-entrypoint-name
     -capability spvShaderInvocationReorderEXT #Allows for SER
     -g    # Debug info so RenderDoc / Nsight can show Slang source.
+    # SHARC (NVIDIA radiance cache) headers, a submodule: #include "SharcCommon.h".
+    -I ${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/SHARC/include
 )
 
 file(GLOB_RECURSE AQUARIUS_SHADER_SOURCES CONFIGURE_DEPENDS

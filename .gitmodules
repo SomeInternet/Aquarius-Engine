@@ -23,3 +23,6 @@
 	path = third-party/DLSS
 	url = https://github.com/NVIDIA/DLSS.git
 	shallow = true
+[submodule "shaders/include/SHARC"]
+	path = shaders/include/SHARC
+	url = https://github.com/NVIDIA-RTX/SHARC.git
