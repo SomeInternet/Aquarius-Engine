@@ -39,4 +39,5 @@ struct PushConstantsPathtracer {
 
 struct PushConstantsPost {
 	uint32_t outputImageIdx;
+	uint32_t swapRedBlue;
 };

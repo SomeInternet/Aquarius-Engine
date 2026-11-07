@@ -5,10 +5,12 @@
 #include <vk_mem_alloc.h>
 #include <format>
 
+#ifdef AQUARIUS_DLSS
 #include <nvsdk_ngx_vk.h>
 #include <nvsdk_ngx_helpers_vk.h>
 #include <nvsdk_ngx_helpers_dlssd_vk.h>
 #include <nvsdk_ngx_helpers_dlssd_d3d.h>
+#endif
 
 #include "engine.h"
 #include "init.h"
@@ -98,6 +100,12 @@ void Engine::initVulkan() {
 			VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME
 		};
 
+		// The post pass writes the swapchain from a compute shader. Linux surfaces
+		// expose B8G8R8A8_UNORM, which has no SPIR-V storage format, so the write
+		// has to be unformatted.
+		VkPhysicalDeviceFeatures features10{};
+		features10.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+
 		VkPhysicalDeviceVulkan11Features features11{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
 		features11.storageBuffer16BitAccess = true; //Allows us to access our half-precision octahedral-projected normals and tangents
 		features11.storagePushConstant16 = true;
@@ -138,6 +146,7 @@ void Engine::initVulkan() {
 			.set_minimum_version(1, 4)
 			.prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
 			.add_required_extensions(requiredExtensions.size(), requiredExtensions.data())
+			.set_required_features(features10)
 			.set_required_features_11(features11)
 			.set_required_features_12(features12)
 			.set_required_features_13(features13)
@@ -157,6 +166,7 @@ void Engine::initVulkan() {
 		_physicalDevice = _vkbData.physicalDevice.physical_device;
 	}
 
+#ifdef AQUARIUS_DLSS
 	//Query NGX extensions for DLSS
 	NVSDK_NGX_FeatureDiscoveryInfo ngxInfo{};
 	ngxInfo.SDKVersion = NVSDK_NGX_Version_API;
@@ -175,6 +185,7 @@ void Engine::initVulkan() {
 		ngxExtensionNames.push_back(ngxExtensionProperties[i].extensionName);
 	}
 	_vkbData.physicalDevice.enable_extensions_if_present(ngxExtensionNames);
+#endif
 
 	{
 		_deviceProperties.properties.pNext = &_deviceProperties.rtProperties;
@@ -201,6 +212,7 @@ void Engine::initVulkan() {
 		if(presentQueueFamilyIdx != _queueFamilyIdx) throw std::runtime_error("Selected queue family doesn't support present!");
 	}
 
+#ifdef AQUARIUS_DLSS
 	NVSDK_NGX_VULKAN_Init_with_ProjectID(PROJECT_ID, NVSDK_NGX_ENGINE_TYPE_CUSTOM, PROJECT_VERSION, L"./build/ngx",
 		_instance, _physicalDevice, _device, vkGetInstanceProcAddr, vkGetDeviceProcAddr);
 	bool paramsLoaded = NVSDK_NGX_SUCCEED(NVSDK_NGX_VULKAN_GetCapabilityParameters(&_ngxParams));
@@ -240,6 +252,7 @@ void Engine::initVulkan() {
 		NVSDK_NGX_VULKAN_DestroyParameters(_ngxParams);
 		NVSDK_NGX_VULKAN_Shutdown1(_device);
 		});
+#endif
 }
 
 void Engine::createSwapChain(int width, int height) {
@@ -257,7 +270,11 @@ void Engine::createSwapChain(int width, int height) {
 
 	vkb::SwapchainBuilder swapChainBuilder = vkb::SwapchainBuilder(_vkbData.device)
 		.set_desired_extent(width, height)
-		.set_desired_format({ VK_FORMAT_R8G8B8A8_UNORM,  VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }) //self gamma correction
+		// set_desired_format inserts at the front, so RGBA is tried first and
+		// BGRA is the fallback. Windows surfaces usually have RGBA; this NVIDIA
+		// Linux surface only has BGRA.
+		.set_desired_format({ VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
+		.set_desired_format({ VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }) //self gamma correction
 		.add_image_usage_flags(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT) //We want to write to the swap chain images with the compute pass
 		.set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR);
 
@@ -297,8 +314,10 @@ void Engine::createSwapChain(int width, int height) {
 	VkFormatProperties3 props3{ .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3 };
 	VkFormatProperties2 props2{ .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &props3 };
 	vkGetPhysicalDeviceFormatProperties2(_physicalDevice, _swapChainImageFormat, &props2);
-	if (_swapChainImageFormat != VK_FORMAT_R8G8B8A8_UNORM || !(props3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT))
-		throw std::runtime_error("Swapchain format is not R8G8B8A8_UNORM with storage support!");
+	const bool unorm8 = _swapChainImageFormat == VK_FORMAT_R8G8B8A8_UNORM || _swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM;
+	const VkFormatFeatureFlags2 storageWrite = VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
+	if (!unorm8 || (props3.optimalTilingFeatures & storageWrite) != storageWrite)
+		throw std::runtime_error("Swapchain format is not an 8-bit UNORM format with storage support!");
 }
 
 void Engine::initSwapChainDescriptors() {
@@ -429,6 +448,7 @@ void Engine::createDLSSFeature() {
 }
 
 void Engine::updateRenderExtent() {
+#ifdef AQUARIUS_DLSS
 	uint32_t optWidth, optHeight, minWidth, minHeight, maxWidth, maxHeight = 0;
 	float sharpness = 0.f;
 
@@ -436,6 +456,9 @@ void Engine::updateRenderExtent() {
 		&optWidth, &optHeight, &maxWidth, &maxHeight, &minWidth, &minHeight, &sharpness);
 	_renderExtent.width = optWidth;
 	_renderExtent.height = optHeight;
+#else
+	_renderExtent = _swapChainExtent;
+#endif
 
 #if _DEBUG
 	std::cout << "Render Extent: (" << _renderExtent.width << ", " << _renderExtent.height << ")" << std::endl;
@@ -892,6 +915,9 @@ void Engine::draw() {
 	//Call the post process
 	PushConstantsPost pcp{};
 	pcp.outputImageIdx = swapChainImageIndex;
+	// Storage writes map shader component 0 onto the format's first channel.
+	// For B8G8R8A8 that channel is blue, so the post shader swaps R and B.
+	pcp.swapRedBlue = _swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM ? 1u : 0u;
 	
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
 	VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
