@@ -173,8 +173,7 @@ void rayGeneration() {
         #if SHARC_QUERY
         if (hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-            float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, sharcParams.hashGridParameters), sharcParams.hashGridParameters);
-            
+            float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, sharcParams.hashGridParameters), sharcParams.hashGridParameters);     
         }
         #endif
 
