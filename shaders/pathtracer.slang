@@ -9,8 +9,8 @@
 
 //Holy shit, I think I love slang
 #include "bsdf.slang"
-#include "include/SHARC/include/SharcCommon.h"
-// sharc
+
+// sharc shit
 #if SHARC_QUERY || SHARC_UPDATE
 #include "sharc.slang"
 #endif
@@ -173,7 +173,26 @@ void rayGeneration() {
         #if SHARC_QUERY
         if (hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-            float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, sharcParams.hashGridParameters), sharcParams.hashGridParameters);     
+            float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, params.hashGridParameters), params.hashGridParameters);
+            // cannot be shorter than voxel length
+            bool lengthCheck = payload.hitLen > voxelSize * sqrt(3.f);
+
+            // cone spread eq from SHARC guide:
+            // 2.0∗ray.length∗sqrt(0.5∗a2/(1−a2)
+            float roughness = prevRoughness;
+            float alphaSq = roughness * roughness * roughness * roughness; // a is material SQUARED
+            bool widthCheck = (2.0f * payload.hitLen * sqrt(0.5f * alphaSq / max(1.0f - alphaSq, 1e-6f))) > voxelSize;
+
+            SharcHitData hitData;
+            hitData.positionWorld = hitPos;
+            hitData.normalWorld = payload.hitNor;
+
+            float3 cacheData;
+            bool getSuccess = SharcGetCachedRadiance(params, hitData, cacheData, false);
+            if (lengthCheck && widthCheck && getSuccess) {
+                accumulatedLight += throughput * cacheData;
+                break;
+            } 
         }
         #endif
 
