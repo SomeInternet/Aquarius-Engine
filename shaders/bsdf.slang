@@ -244,6 +244,88 @@ inline void evalCookTorrance(float3 wo, float3 wi, PBR pbr, out float3 bsdf, out
     }
 }
 
+// Taking a cue from Vulkan (wink)
+inline void evalCookTorrance2(float3 wo, float3 wi, PBR pbr, out float3 bsdf, inout float3 diffuse, inout float3 specular, out float pdf) {
+    if (wo.z < 0.f) {
+        pdf = 0.f;
+        bsdf = float3(0.f);
+        return;
+    }
+
+    float alpha2 = pbr.metallicRoughness.y;
+    alpha2 *= alpha2 * alpha2 * alpha2;
+
+    float cosThetaO = max(wo.z, EPSILON);
+    float cosThetaI = max(wi.z, EPSILON);
+
+    float m = pbr.metallicRoughness.x;
+    float fn = fDielectric(wo, float3(0, 0, 1), pbr.etaA, pbr.etaB).x;
+    float pDiffuse = (1.f - m) * (1.f - pbr.transmissiveness) * (1.f - fn);
+    float pDielectric = 1.f - m - pDiffuse;
+
+    if (wi.z < 0) { // Transmissive
+        float3 wh = normalize(pbr.etaA * wo + pbr.etaB * wi);
+        if (wh.z < 0.f) wh = -wh;
+        if (dot(wh, wi) >= 0.f || dot(wo, wh) < 0.f || pbr.etaA == pbr.etaB) {
+            bsdf = float3(0.f);
+            pdf = 0.f;
+            return;
+        }
+
+        float fd = fDielectric(wo, wh, pbr.etaA, pbr.etaB).x;
+        float prTrans = (1.f - m) * (1.f - fd) * pbr.transmissiveness;
+
+        float R = fd;
+        float T = pbr.transmissiveness * (1.f - R);
+
+        float absDotWoWh = abs(dot(wo, wh));
+        float absDotWiWh = abs(dot(wi, wh));
+
+        float d = d(wh, alpha2);
+        float g = g(wo, wi, alpha2);
+        float s = -absDotWiWh + absDotWoWh * pbr.etaA / pbr.etaB;
+
+        // Write out diffuse and specular albedos
+        specular = (pbr.color * (1.f - pbr.metallicRoughness.x)).xyz * (1.f - fn);
+        diffuse = pbr.color.xyz * f(pbr.color.xyz, wo, float3(0, 0, 1)) * fn;
+
+        pdf = pDielectric * (R + T > 0.f ? T / (R + T) : 0.f) *
+              d * g1(wo, alpha2) * absDotWoWh * absDotWiWh / (cosThetaO * s * s);
+
+        float denom = s * s * cosThetaO * pbr.etaB / pbr.etaA * pbr.etaB / pbr.etaA;
+
+        bsdf = prTrans * pbr.color.rgb * d * g * absDotWoWh * absDotWiWh / denom;
+    } else {
+        float3 wh = normalize(wo + wi);
+        float fd = fDielectric(wo, wh, pbr.etaA, pbr.etaB).x;
+
+        float prSpecular = (1.f - m) * fd;
+        float prDiffuse = (1.f - m - prSpecular) * (1.f - pbr.transmissiveness);
+
+        float R = fd;
+        float T = pbr.transmissiveness * (1.f - R);
+
+        float d = d(wh, alpha2);
+        float g = g(wo, wi, alpha2);
+
+        float denom = 4.f * cosThetaO;
+
+        //Write out diffuse and specular albedos
+        specular = (pbr.color * (1.f - pbr.metallicRoughness.x)).xyz * (1.f - fn);
+        diffuse = pbr.color.xyz * f(pbr.color.xyz, wo, float3(0, 0, 1)) * fn;
+
+        // Set the bsdf and pdf values
+        bsdf = m * d * g * f(pbr.color.rgb, wo, wh) / denom + // Metallic contribution
+               prSpecular * d * g / denom +                   // Specular reflection contribution
+               prDiffuse * pbr.color.rgb * cosThetaI / PI;    // Diffuse contribution
+
+        float pdfR = d * g1(wo, alpha2) / denom;
+        pdf = m * pdfR +                                               // Metallic contribution
+              pDielectric * (R + T > 0.f ? R / (R + T) : 0.f) * pdfR + // Specular reflection contribution
+              pDiffuse * cosThetaI / PI;                               // Diffuse contribution
+    }
+}
+
 inline float powerHeuristic(int nf, float fPdf, int ng, float gPdf) {
     float denom = (float(nf) * fPdf) * (float(nf) * fPdf) + (float(ng) * gPdf) * (float(ng) * gPdf);
     if (denom == 0.f) {

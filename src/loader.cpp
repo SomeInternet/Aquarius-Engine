@@ -524,6 +524,33 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
         }
     }
 
+    //Load animations
+    //TODO: This loads all animations at once. Might want to consider a smarter way of going about it...
+    for (const auto &anim : model.animations) {
+        Animation animation;
+
+        const auto &sampler = anim.samplers[0];
+
+        //Inputs are the timestamps
+        const auto &inputAccessor = model.accessors[sampler.input];
+        const auto &inputBufferView = model.bufferViews[inputAccessor.bufferView];
+        const auto &inputBuffer = model.buffers[inputBufferView.buffer];
+
+        animation.nKeyframes = inputAccessor.count;
+        animation.times = reinterpret_cast<const float *>(&inputBuffer.data[inputBufferView.byteOffset + inputAccessor.byteOffset]);
+
+        //Outputs are the actual keyframe values
+        const auto &outputAccessor = model.accessors[sampler.output];
+        const auto &outputBufferView = model.bufferViews[outputAccessor.bufferView];
+        const auto &outputBuffer = model.buffers[outputBufferView.buffer];
+
+        //TODO: Add multi-channel support
+        if (anim.channels[0].target_path == "translation") animation.type = AnimationType::TRANS;
+        else if (anim.channels[0].target_path == "rotation") animation.type = AnimationType::ROT;
+        else if (anim.channels[0].target_path == "scale") animation.type = AnimationType::SCALE;
+    }
+
+    //Assumes static lights
     std::vector<LightTriangle> emissiveTriangles;
     std::vector<double> emissiveWeights;
     //Create a flat vector of emissive triangles
@@ -661,6 +688,10 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
 
     newScene.loaded = true;
     return newScene;
+}
+
+void loader::updateScene(VkDevice &device, Scene &scene, vkb::DispatchTable &dispatchTable, float time) {
+
 }
 
 void loader::destroyScene(VkDevice &device, Allocator &allocator, Scene &scene, vkb::DispatchTable &dispatchTable) {

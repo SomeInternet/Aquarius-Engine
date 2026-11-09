@@ -5,37 +5,40 @@
 [vk::binding(0, 0)]
 RWTexture2D<float4> radianceImage;
 
-[vk::binding(0, 1)]
+[vk::binding(1, 0)]
 RWTexture2D<float4> diffuseAlbedoImage;
 
-[vk::binding(0, 2)]
+[vk::binding(2, 0)]
 RWTexture2D<float4> specularAlbedoImage;
 
-[vk::binding(0, 3)]
+[vk::binding(3, 0)]
 RWTexture2D<float4> normalRoughnessImage;
 
-[vk::binding(0, 4)]
+[vk::binding(4, 0)]
 RWTexture2D<float4> depthImage;
 
-[vk::binding(0, 5)]
+[vk::binding(5, 0)]
 RWTexture2D<float4> motionVectorImage;
 
-[vk::binding(0, 6)]
+[vk::binding(6, 0)]
 RWTexture2D<float4> specHitDistImage;
 
-[vk::binding(0, 7)]
+[vk::binding(7, 0)]
 RWTexture2D<float4> dlssOutputImage;
 
-[vk::binding(1, 0)] //TODO: Change this if you change the max number of swap chain images
+[vk::binding(8, 0)]
+RWTexture2D<float4> orcaAlbedoImage;
+
+[vk::binding(9, 0)] //TODO: Change this if you change the max number of swap chain images
 Texture2D<float4> sceneImages[];
 
-[vk::binding(2, 0)]
+[vk::binding(10, 0)]
 SamplerState samplers[];
 
-[vk::binding(3, 0)]
+[vk::binding(11, 0)]
 RaytracingAccelerationStructure tlas;
 
-[vk::binding(4, 0)]
+[vk::binding(12, 0)]
 Texture2D<float4> hdrImage;
 
 [[vk::push_constant]]
@@ -277,7 +280,9 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 worldNor = normalize(mul(ObjectToWorld3x4(), float4(mulNorTranspose(pointInfo, float3(0.f, 0.f, 1.f)), 0.f)));
 
-    //Light sampling, weighted against the chance of the BSDF sampling the same direction
+    // Light sampling, weighted against the chance of the BSDF sampling the same direction
+    float3 gAlbedo;
+    float3 gSpecular;
     {
         LightSample ls = sampleLight(pc.sceneData, hitPos);
         float3 wiLight = normalize(mulNor(pointInfo, mul(WorldToObject3x4(), float4(ls.dir.xyz, 0.f)).xyz));
@@ -285,13 +290,26 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
         if (ls.pr > 0.f && wiLight.z != 0.f) {
             float3 bsdf;
             float bsdfPdf;
-            evalCookTorrance(wo, wiLight, pbr, bsdf, bsdfPdf);
+            evalCookTorrance2(wo, wiLight, pbr, bsdf, gAlbedo, gSpecular, bsdfPdf);
 
             //The bsdf already includes the cosine term
             if (any(bsdf > 0.f) && shadowRayCast(hitPos + worldNor * sign(wiLight.z) * EPSILON, ls.dir.xyz, ls.dir.w - 2.f * EPSILON)) {
                 payload.directLight = bsdf * ls.radiance * powerHeuristic(1, ls.pr, 1, bsdfPdf) / ls.pr;
             }
         }
+    }
+
+    //Write out information to the shared DLSS/ORCA GBuffer images
+    if (!payload.gBufferWritten) {
+        payload.gBufferWritten = true;
+        diffuseAlbedoImage[DispatchRaysIndex().xy] = float4(gAlbedo, pbr.metallicRoughness.x);
+        specularAlbedoImage[DispatchRaysIndex().xy] = float4(gSpecular, 1.f);
+        normalRoughnessImage[DispatchRaysIndex().xy] = float4(worldNor, pbr.metallicRoughness.y);
+        depthImage[DispatchRaysIndex().xy] = RayTCurrent();
+        // TODO: Specular hit dist image via raycast...?
+        // TODO: Motion vectors
+        orcaAlbedoImage[DispatchRaysIndex().xy] = pbr.color;
+
     }
 
     float3 wi;
@@ -322,6 +340,15 @@ void miss(inout HitPayload payload) {
     payload.throughput = hdrImage.SampleLevel(samplers[0], uv, 0.f).rgb;
     payload.pdf = envLightPdf(pc.sceneData, uv);
     payload.throughput.b = min(-payload.throughput.b, -EPSILON);
+
+    if (!payload.gBufferWritten) {
+        payload.gBufferWritten = true;
+        diffuseAlbedoImage[DispatchRaysIndex().xy] = float4(0.f);
+        specularAlbedoImage[DispatchRaysIndex().xy] = float4(0.f);
+        normalRoughnessImage[DispatchRaysIndex().xy] = float4(0.f);
+        orcaAlbedoImage[DispatchRaysIndex().xy] = float4(float3(0.f), 1.f);
+        depthImage[DispatchRaysIndex().xy] = INFINITY;
+    }
 }
 
 [shader("anyhit")]

@@ -73,6 +73,18 @@ struct Instance {
 	uint32_t mesh;
 };
 
+enum AnimationType {
+	TRANS, ROT, SCALE
+};
+
+struct Animation {
+	uint32_t target;
+	AnimationType type;
+	uint32_t nKeyframes;
+	const float *times;
+	std::vector<glm::vec4> values;
+};
+
 struct Scene {
 	bool loaded{ false };
 

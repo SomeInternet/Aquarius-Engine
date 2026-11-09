@@ -328,14 +328,26 @@ void Engine::initRadianceImageDescriptors() {
 void Engine::createDLSSImages() {
 	VkExtent3D extent = VkExtent3D(_renderExtent.width, _renderExtent.height, 1);
 	
-	_diffuseAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_diffuseAlbedoImageInfo);
-	_specularAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_specularAlbedoImageInfo);
-	_normalRoughnessImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_normalRoughnessImageInfo);
-	_viewDepthImage = _allocator.createImage(extent, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_viewDepthImageInfo);
+	//TRANSFER_SRC so the debug view can blit these directly into the swap chain
+	constexpr VkImageUsageFlags debugViewUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+	_diffuseAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_diffuseAlbedoImageInfo);
+	_specularAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_specularAlbedoImageInfo);
+	_normalRoughnessImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, debugViewUsage, false, &_normalRoughnessImageInfo);
+	_viewDepthImage = _allocator.createImage(extent, VK_FORMAT_R32_SFLOAT, debugViewUsage, false, &_viewDepthImageInfo);
 	_motionVectorImage = _allocator.createImage(extent, VK_FORMAT_R32G32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_motionVectorImageInfo);
 	_specHitDistImage = _allocator.createImage(extent, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_specHitDistImageInfo);
 	_dlssOutputImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_dlssOutputImageInfo);
+	_orcaAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_orcaAlbedoImageInfo);
 	//TODO: Create additional images for DLSS (might want too look into the depth of field guide)
+
+	//The shaders write these as storage images, so keep them in GENERAL
+	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
+		for (VkImage image : { _diffuseAlbedoImage.image, _specularAlbedoImage.image, _normalRoughnessImage.image, _viewDepthImage.image,
+			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image }) {
+			util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+		}
+		});
 }
 
 void Engine::destroyDLSSImages() {
@@ -346,6 +358,7 @@ void Engine::destroyDLSSImages() {
 	_allocator.destroyImage(_motionVectorImage);
 	_allocator.destroyImage(_specHitDistImage);
 	_allocator.destroyImage(_dlssOutputImage);
+	_allocator.destroyImage(_orcaAlbedoImage);
 	//_allocator.destroyImage(_postInputImage);
 }
 
@@ -357,6 +370,7 @@ void Engine::initDLSSImageDescriptors() {
 	writeImageDescriptor(5, _motionVectorImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(6, _specHitDistImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(7, _dlssOutputImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+	writeImageDescriptor(8, _orcaAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	_allocator.flush(_imageHeap);
 }
 
@@ -609,10 +623,18 @@ void Engine::initPipelinePathtracer() {
 	//Create the bindings for the resources
 	std::array mappings = {
 		heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
-		heapMapping(1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
-		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
-		pushAddressMapping(3, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushConstantsPathtracer, tlas)), //Tlas
-		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
+		heapMapping(1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 1 * imageStride, 0), //Radiance Image
+		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 2 * imageStride, 0), //Radiance Image
+		heapMapping(3, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 3 * imageStride, 0), //Radiance Image
+		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 4 * imageStride, 0), //Radiance Image
+		heapMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 5 * imageStride, 0), //Radiance Image
+		heapMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 6 * imageStride, 0), //Radiance Image
+		heapMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 7 * imageStride, 0), //Radiance Image
+		heapMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 8 * imageStride, 0), //Radiance Image
+		heapMapping(9, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
+		heapMapping(10, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
+		pushAddressMapping(11, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushConstantsPathtracer, tlas)), //Tlas
+		heapMapping(12, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -792,6 +814,21 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 
 	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
+	//Debug view to make sure the DLSS/GBuffer images are appearing properly
+	std::vector<const char *> debugViewOptions = {"Pathtraced", "Diffuse Albedo", "Specular Albedo", "Normals", "Depth", "ORCA Albedo"};
+	const char *selected = debugViewOptions[static_cast<int>(_debugView)];
+
+	if (ImGui::BeginCombo("Debug view", selected)) {
+		for (uint8_t i = 0; i < debugViewOptions.size(); ++i) {
+			bool isSelected = selected == debugViewOptions[i];
+			if (ImGui::Selectable(debugViewOptions[i], isSelected)) selected = debugViewOptions[i];
+
+			isSelected = selected == debugViewOptions[i];
+			if (isSelected) _debugView = static_cast<EngineDebugView>(i);
+		}
+		ImGui::EndCombo();
+	}
+
 	int maxBounces = _pcpt.maxBounces;
 	ImGui::SliderInt("Max bounces", &maxBounces, 1, 20);
 	if (maxBounces != _pcpt.maxBounces) _frameNum = 0;
@@ -886,32 +923,77 @@ void Engine::draw() {
 	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPt);
 	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_rayGenerationRegion, &_missRegion, &_hitRegion, &_callRegion, _renderExtent.width, _renderExtent.height, 1);
 
-	//Transition the swap chain image layout for writing from the post process compute
-	util::transitionImageLayout(commandBuffer, _swapChainImages[swapChainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+	VkImage swapChainImage = _swapChainImages[swapChainImageIndex];
+	VkImageLayout swapChainLayout;
 
-	//Call the post process
-	PushConstantsPost pcp{};
-	pcp.outputImageIdx = swapChainImageIndex;
-	
-	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
-	VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
-	pushDataPost.offset = 0;
-	pushDataPost.data = { &pcp, sizeof(PushConstantsPost) };
-	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPost);
-	vkCmdDispatch(commandBuffer, (_swapChainExtent.width + 15) / 16, (_swapChainExtent.height + 15) / 16, 1);
+	if (_debugView == EngineDebugView::PATHTRACED) {
+		//Transition the swap chain image layout for writing from the post process compute
+		util::transitionImageLayout(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+		swapChainLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+		//Call the post process
+		PushConstantsPost pcp{};
+		pcp.outputImageIdx = swapChainImageIndex;
+
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
+		VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
+		pushDataPost.offset = 0;
+		pushDataPost.data = { &pcp, sizeof(PushConstantsPost) };
+		_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPost);
+		vkCmdDispatch(commandBuffer, (_swapChainExtent.width + 15) / 16, (_swapChainExtent.height + 15) / 16, 1);
+	}
+	else {
+		//Blit the selected g-buffer image straight into the swap chain
+		const AllocatedImage *debugImage = nullptr;
+		switch (_debugView) {
+		case EngineDebugView::DIFFUSE_ALBEDO: debugImage = &_diffuseAlbedoImage; break;
+		case EngineDebugView::SPECULAR_ALBEDO: debugImage = &_specularAlbedoImage; break;
+		case EngineDebugView::NORMALS: debugImage = &_normalRoughnessImage; break;
+		case EngineDebugView::DEPTH: debugImage = &_viewDepthImage; break;
+		case EngineDebugView::ORCA_ALBEDO: debugImage = &_orcaAlbedoImage; break;
+		default: break;
+		}
+
+		util::transitionImageLayout(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		swapChainLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+		VkImageSubresourceRange clearRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
+		VkClearColorValue clearValue = { { 0.f, 0.f, 0.f, 1.f } };
+		vkCmdClearColorImage(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearValue, 1, &clearRange);
+
+		//GENERAL -> GENERAL barrier so the pathtracer's writes are visible to the blit
+		util::transitionImageLayout(commandBuffer, debugImage->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+
+		VkImageBlit2 blitRegion{ .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2 };
+		blitRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		blitRegion.srcOffsets[1] = { static_cast<int32_t>(_renderExtent.width), static_cast<int32_t>(_renderExtent.height), 1 };
+		blitRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		blitRegion.dstOffsets[1] = { static_cast<int32_t>(_swapChainExtent.width), static_cast<int32_t>(_swapChainExtent.height), 1 };
+
+		VkBlitImageInfo2 blitInfo{ .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2 };
+		blitInfo.srcImage = debugImage->image;
+		blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		blitInfo.dstImage = swapChainImage;
+		blitInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		blitInfo.regionCount = 1;
+		blitInfo.pRegions = &blitRegion;
+		blitInfo.filter = VK_FILTER_NEAREST; //Linear filtering isn't guaranteed for R32_SFLOAT (depth)
+
+		vkCmdBlitImage2(commandBuffer, &blitInfo);
+	}
 
 	if (_showGui) {
-		util::transitionImageLayout(commandBuffer, _swapChainImages[swapChainImageIndex], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+		util::transitionImageLayout(commandBuffer, swapChainImage, swapChainLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
 		drawImgui(commandBuffer, _swapChainImageViews[swapChainImageIndex]);
 
 		//Transition image for presentation
-		util::transitionImageLayout(commandBuffer, _swapChainImages[swapChainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+		util::transitionImageLayout(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 	}
 	else {
-		util::transitionImageLayout(commandBuffer, _swapChainImages[swapChainImageIndex], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+		util::transitionImageLayout(commandBuffer, swapChainImage, swapChainLayout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 	}
-	
+
 
 	VK_CHECK(vkEndCommandBuffer(commandBuffer));
 
