@@ -1,5 +1,19 @@
+// SHARC defs
+#ifndef SHARC_QUERY
+#define SHARC_QUERY 0 
+#endif
+
+#ifndef SHARC_UPDATE
+#define SHARC_UPDATE 0 
+#endif
+
 //Holy shit, I think I love slang
 #include "bsdf.slang"
+#include "include/SHARC/include/SharcCommon.h"
+// sharc
+#if SHARC_QUERY || SHARC_UPDATE
+#include "sharc.slang"
+#endif
 
 //Inputs
 [vk::binding(0, 0)]
@@ -137,7 +151,13 @@ void rayGeneration() {
 
     float3 throughput = float3(1.f);
     float3 accumulatedLight = float3(0.f);
-    float prevBsdfPdf = 0.f; //0 when no light was sampled at the previous vertex (camera ray), so hitting a light gets the full weight
+    float prevBsdfPdf = 0.f; // 0 when no light was sampled at the previous vertex (camera ray), so hitting a light gets the full weight
+    
+    float prevRoughness = 1.f;
+    #if SHARC_QUERY
+        SharcParameters params = createSharcParams(pc.camPos);
+    #endif
+    
     HitPayload payload = {};
     for (uint i = 0; i < pc.maxBounces; ++i) {
         payload.seed = seed;
@@ -147,6 +167,16 @@ void rayGeneration() {
         ReorderThread(hitObject);
         HitObject::Invoke<HitPayload>(tlas, hitObject, payload);
         seed = payload.seed;
+
+        // SHARC QUERY/RENDER stage integration
+        // we not considering the first (direct) bounce, if cache hit we use cache and terminate
+        #if SHARC_QUERY
+        if (hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
+            float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
+            float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, sharcParams.hashGridParameters), sharcParams.hashGridParameters);
+            
+        }
+        #endif
 
         if (hitObject.IsHit()) accumulatedLight += throughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
 
@@ -164,6 +194,7 @@ void rayGeneration() {
             float3 weight = payload.throughput.rgb / payload.pdf;
             throughput *= select(isnan(weight), float3(0.f), weight);
             prevBsdfPdf = payload.pdf;
+            prevRoughness = payload.roughness;
         }
 
         // RR
