@@ -3,6 +3,7 @@
 #include <stb_image.h>
 #include <tiny_gltf.h>
 #include <vk_mem_alloc.h>
+#include <cstddef>
 #include <format>
 
 #ifdef AQUARIUS_DLSS
@@ -17,6 +18,13 @@
 #include "loader.h"
 #include "pushconstants.h"
 #include "aliastable.h"
+
+static_assert(sizeof(glm::vec3) == 12, "SHaRC push constants assume a packed vec3");
+static_assert(offsetof(PushConstantsResolve, hashEntriesAddress) == 40);
+static_assert(offsetof(PushConstantsResolve, accumulationAddress) == 48);
+static_assert(offsetof(PushConstantsResolve, resolvedAddress) == 56);
+static_assert(offsetof(PushConstantsResolve, capacity) == 64);
+static_assert(offsetof(PushConstantsResolve, frameIndex) == 80);
 
 //Helpers to, uh, help us set up the descriptors for the shaders
 static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, VkSpirvResourceTypeFlagsEXT mask, 
@@ -105,9 +113,11 @@ void Engine::initVulkan() {
 		// has to be unformatted.
 		VkPhysicalDeviceFeatures features10{};
 		features10.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+		features10.shaderInt64 = VK_TRUE; //SHaRC hash keys are uint64
 
 		VkPhysicalDeviceVulkan11Features features11{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
 		features11.storageBuffer16BitAccess = true; //Allows us to access our half-precision octahedral-projected normals and tangents
+		features11.uniformAndStorageBuffer16BitAccess = true; //SHaRC resolved records store float16 radiance
 		features11.storagePushConstant16 = true;
 
 		VkPhysicalDeviceVulkan12Features features12{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
@@ -428,6 +438,7 @@ void Engine::initSyncStructures() {
 	}
 
 	VK_CHECK(vkCreateFence(_device, &fenceCreateInfo, nullptr, &_immFence));
+	VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_sharcSemaphore));
 
 	_deletionQueue.push([this]() {
 		for (auto &frame : _frameResources) {
@@ -440,6 +451,7 @@ void Engine::initSyncStructures() {
 		}
 
 		vkDestroyFence(_device, _immFence, nullptr);
+		vkDestroySemaphore(_device, _sharcSemaphore, nullptr);
 		});
 }
 
@@ -730,6 +742,138 @@ void Engine::initPipelinePathtracer() {
 	_deletionQueue.push([this]() { _allocator.destroyBuffer(_sbtBuffer); });
 }
 
+void Engine::createSharcBuffers() {
+	const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	_sharcHashEntries = _allocator.createBuffer(VkDeviceSize(SHARC_CAPACITY) * 8, usage, VMA_MEMORY_USAGE_GPU_ONLY, false);
+	_sharcAccumulation = _allocator.createBuffer(VkDeviceSize(SHARC_CAPACITY) * 16, usage, VMA_MEMORY_USAGE_GPU_ONLY, false);
+	_sharcResolved = _allocator.createBuffer(VkDeviceSize(SHARC_CAPACITY) * 16, usage, VMA_MEMORY_USAGE_GPU_ONLY, false);
+
+	_deletionQueue.push([this]() {
+		_allocator.destroyBuffer(_sharcHashEntries);
+		_allocator.destroyBuffer(_sharcAccumulation);
+		_allocator.destroyBuffer(_sharcResolved);
+		});
+
+	// Hash key 0 is an empty slot. Zeroed accumulation and resolved records match.
+	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
+		vkCmdFillBuffer(commandBuffer, _sharcHashEntries.buffer, 0, VK_WHOLE_SIZE, 0);
+		vkCmdFillBuffer(commandBuffer, _sharcAccumulation.buffer, 0, VK_WHOLE_SIZE, 0);
+		vkCmdFillBuffer(commandBuffer, _sharcResolved.buffer, 0, VK_WHOLE_SIZE, 0);
+		});
+}
+
+void Engine::initPipelineResolve() {
+	VkShaderModule moduleResolve = util::loadShaderModule("./build/shaders/resolve.spv", _device);
+
+	std::array mappings = {
+		pushAddressMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, hashEntriesAddress)),
+		pushAddressMapping(1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, accumulationAddress)),
+		pushAddressMapping(2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, resolvedAddress))
+	};
+
+	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
+	mappingInfo.mappingCount = static_cast<uint32_t>(mappings.size());
+	mappingInfo.pMappings = mappings.data();
+
+	VkPipelineCreateFlags2CreateInfo flags{ .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO };
+	flags.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+
+	VkPipelineShaderStageCreateInfo shaderStage{ .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+	shaderStage.pNext = &mappingInfo;
+	shaderStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	shaderStage.module = moduleResolve;
+	shaderStage.pName = "main";
+
+	VkComputePipelineCreateInfo pipelineInfo{ .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+	pipelineInfo.pNext = &flags;
+	pipelineInfo.stage = shaderStage;
+	pipelineInfo.layout = VK_NULL_HANDLE;
+
+	VK_CHECK(vkCreateComputePipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_pipelineResolve));
+
+	vkDestroyShaderModule(_device, moduleResolve, nullptr);
+
+	_deletionQueue.push([this]() { vkDestroyPipeline(_device, _pipelineResolve, nullptr); });
+}
+
+void Engine::resolveSharc(VkCommandBuffer commandBuffer) {
+	const glm::vec3 cameraPosition = _pcpt.camPos;
+	if (!_sharcCameraInitialized) {
+		_sharcCameraPositionPrev = cameraPosition;
+		_sharcCameraInitialized = true;
+	}
+
+	const std::array<VkBuffer, 3> cacheBuffers = {
+		_sharcHashEntries.buffer,
+		_sharcAccumulation.buffer,
+		_sharcResolved.buffer
+	};
+
+	// Update (ray tracing) writes the cache before this dispatch. The render pass
+	// reads the resolved records afterwards. Both sides are still stubs, so the
+	// barriers are what keeps those passes ordered once they land in this buffer.
+	auto cacheDependency = [&](VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+		VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+			std::array<VkBufferMemoryBarrier2, 3> barriers{};
+			for (size_t i = 0; i < cacheBuffers.size(); ++i) {
+				barriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+				barriers[i].srcStageMask = srcStage;
+				barriers[i].srcAccessMask = srcAccess;
+				barriers[i].dstStageMask = dstStage;
+				barriers[i].dstAccessMask = dstAccess;
+				barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				barriers[i].buffer = cacheBuffers[i];
+				barriers[i].size = VK_WHOLE_SIZE;
+			}
+
+			VkDependencyInfo dependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+			dependency.bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+			dependency.pBufferMemoryBarriers = barriers.data();
+			vkCmdPipelineBarrier2(commandBuffer, &dependency);
+		};
+
+	cacheDependency(
+		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+		VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+		VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+	PushConstantsResolve pc{};
+	pc.cameraPosition = cameraPosition;
+	pc.logarithmBase = SHARC_LOGARITHM_BASE;
+	pc.sceneScale = _sharcSceneScale;
+	pc.levelBias = SHARC_LEVEL_BIAS;
+	pc.cameraPositionPrev = _sharcCameraPositionPrev;
+	pc.radianceScale = SHARC_RADIANCE_SCALE;
+	pc.hashEntriesAddress = _sharcHashEntries.address;
+	pc.accumulationAddress = _sharcAccumulation.address;
+	pc.resolvedAddress = _sharcResolved.address;
+	pc.capacity = SHARC_CAPACITY;
+	pc.accumulationFrameNum = _sharcAccumulationFrameNum;
+	pc.responsiveFrameNum = _sharcAccumulationFrameNum;
+	pc.staleFrameNumMax = _sharcStaleFrameNumMax;
+	pc.frameIndex = _totalFrames;
+
+	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineResolve);
+
+	VkPushDataInfoEXT pushData{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
+	pushData.offset = 0;
+	pushData.data = { &pc, sizeof(PushConstantsResolve) };
+	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushData);
+
+	const uint32_t groups = (SHARC_CAPACITY + SHARC_RESOLVE_BLOCK_SIZE - 1) / SHARC_RESOLVE_BLOCK_SIZE;
+	vkCmdDispatch(commandBuffer, groups, 1, 1);
+
+	cacheDependency(
+		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+		VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+		VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+
+	_sharcCameraPositionPrev = cameraPosition;
+}
+
 void Engine::initPipelinePost() {
 	VkShaderModule modulePost = util::loadShaderModule("./build/shaders/post.spv", _device);
 
@@ -830,6 +974,16 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	if (lensRadius != _pcpt.lensRadius) _frameNum = 0;
 	_pcpt.lensRadius = lensRadius;
 
+	int accumulationFrames = static_cast<int>(_sharcAccumulationFrameNum);
+	ImGui::SliderInt("SHaRC accumulation frames", &accumulationFrames, 1, 128);
+	_sharcAccumulationFrameNum = static_cast<uint32_t>(accumulationFrames);
+
+	int staleFrames = static_cast<int>(_sharcStaleFrameNumMax);
+	ImGui::SliderInt("SHaRC stale frames", &staleFrames, 8, 256);
+	_sharcStaleFrameNumMax = static_cast<uint32_t>(staleFrames);
+
+	ImGui::SliderFloat("SHaRC scene scale", &_sharcSceneScale, 1.f, 200.f);
+
 	float theta = _camera.getTheta();
 	ImGui::InputFloat("Theta", &theta);
 
@@ -900,6 +1054,11 @@ void Engine::draw() {
 	_pcpt.sceneData = _sceneDataBuffer.address;
 	_pcpt.totalFrames = _totalFrames;
 
+	// SHaRC order is update, resolve, then the render query. Update and query
+	// are not in this command buffer yet; resolve still has to run first so the
+	// resolved records are what the path tracer will read.
+	resolveSharc(commandBuffer);
+
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelinePathtracer);
 
 	VkPushDataInfoEXT pushDataPt{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
@@ -943,12 +1102,23 @@ void Engine::draw() {
 
 	VkCommandBufferSubmitInfo commandBufferSubmitInfo = init::commandBufferSubmitInfo(commandBuffer);
 
-	VkSemaphoreSubmitInfo waitSemaphoreSubmitInfo = init::semaphoreSubmitInfo(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, currFrame._swapChainSemaphore);
-	VkSemaphoreSubmitInfo signalSemaphoreSubmitInfo = init::semaphoreSubmitInfo(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, _renderCompleteSemaphores[swapChainImageIndex]);
+	// The cache is one buffer shared by every frame in flight. The semaphore chains
+	// this frame's resolve and ray tracing behind the previous frame's.
+	const VkPipelineStageFlags2 sharcStages = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+	std::array<VkSemaphoreSubmitInfo, 2> waits = {
+		init::semaphoreSubmitInfo(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, currFrame._swapChainSemaphore),
+		init::semaphoreSubmitInfo(sharcStages, _sharcSemaphore)
+	};
+	std::array<VkSemaphoreSubmitInfo, 2> signals = {
+		init::semaphoreSubmitInfo(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, _renderCompleteSemaphores[swapChainImageIndex]),
+		init::semaphoreSubmitInfo(sharcStages, _sharcSemaphore)
+	};
+	const uint32_t waitCount = _sharcSemaphoreWait ? 2u : 1u;
 
 	//Submit
-	VkSubmitInfo2 submit = init::submitInfo(&commandBufferSubmitInfo, &signalSemaphoreSubmitInfo, &waitSemaphoreSubmitInfo, 1, 1);
+	VkSubmitInfo2 submit = init::submitInfo(&commandBufferSubmitInfo, signals.data(), waits.data(), signals.size(), waitCount);
 	VK_CHECK(vkQueueSubmit2(_queue, 1, &submit, currFrame._renderFence));
+	_sharcSemaphoreWait = true;
 
 	//TODO: Present
 	VkPresentInfoKHR presentInfo{};
@@ -1035,7 +1205,10 @@ void Engine::init() {
 	std::string path = "./models/cornellbox_transmission.glb";
 	loadScene(path);
 
+	createSharcBuffers();
+
 	initPipelinePathtracer();
+	initPipelineResolve();
 	initPipelinePost();
 
 	initImgui();
