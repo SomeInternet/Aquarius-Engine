@@ -5,9 +5,8 @@
 #define HASH_GRID_COMPACT 0
 #define HASH_GRID_ENABLE_64_BIT_ATOMICS 0
 
-
-#include "include/SHARC/include/SharcCommon.h"
 #include "bsdf.slang"
+#include "sharc_util.slang"
 
 // SHARC
 //  SHARC hash table
@@ -21,15 +20,6 @@ RWStructuredBuffer<SharcAccumulationData> sharcAccumulation;
 // Temporally resolved cache
 [vk::binding(7, 0)]
 RWStructuredBuffer<SharcPackedData> sharcResolved;
-
-struct SharcConfig
-{
-    uint entriesNum;
-    float sceneScale;
-    float radianceScale;
-    uint padding;
-};
-
 [vk::binding(8, 0)]
 StructuredBuffer<SharcConfig> sharcConfigBuffer;
 
@@ -79,44 +69,6 @@ RWTexture2D<float4> orcaAlbedoImage;
 
 [[vk::push_constant]]
 PushConstantsPathtracer pc;
-
-//Initialize sharc parameters
-inline SharcParameters BuildSharcParameters()
-{
-    SharcConfig config = sharcConfigBuffer[0];
-
-    SharcParameters parameters;
-
-    // Controls how world-space positions are mapped into cache voxels.
-    parameters.hashGridParameters.cameraPosition = pc.camPos;
-    parameters.hashGridParameters.sceneScale =
-        config.sceneScale;
-    parameters.hashGridParameters.logarithmBase =
-        SHARC_GRID_LOGARITHM_BASE;
-    
-    parameters.hashGridParameters.levelBias =
-        SHARC_GRID_LEVEL_BIAS;
-
-    // All three buffers must have this same number of entries.
-    parameters.hashGridData.capacity =
-        config.entriesNum;
-    parameters.hashGridData.hashEntriesBuffer =
-        sharcHashEntries;
-
-#if !HASH_GRID_ENABLE_64_BIT_ATOMICS
-    parameters.hashGridData.lockBuffer = sharcLockBuffer;
-#endif
-
-
-    parameters.accumulationBuffer =
-        sharcAccumulation;
-    parameters.resolvedBuffer =
-        sharcResolved;
-    parameters.radianceScale =
-        config.radianceScale;
-
-    return parameters;
-}
 
 struct UpdateHitPayload
 {
@@ -258,7 +210,7 @@ void rayGeneration() {
     ray.TMax = INFINITY;
 
     // SHARC init
-    SharcParameters sharcParameters = BuildSharcParameters();
+    SharcParameters sharcParameters = createSharcParams(pc.camPos, sharcConfigBuffer[0], sharcHashEntries, sharcAccumulation, sharcResolved, sharcLockBuffer);
 
     SharcState sharcState;
     SharcInit(sharcState);
@@ -375,6 +327,9 @@ void closestHit(inout UpdateHitPayload payload, in BuiltInTriangleIntersectionAt
 
             //SHARC local radiance
             payload.sharcLocalRadiance = emittedRadiance;
+            payload.sharcPositionWorld = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+            payload.sharcNormalWorld = normalize(mul(gNor, WorldToObject3x4()).xyz);
+            payload.sharcSurfaceValid = 1;
             payload.throughput = emittedRadiance;
             payload.throughput.b = min(-payload.throughput.b, -EPSILON);
 

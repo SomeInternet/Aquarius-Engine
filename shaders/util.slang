@@ -87,6 +87,8 @@ struct SceneData {
     float totalEnvWeight = 0.f;
 };
 
+
+
 enum EngineStateFlags : uint32_t {
     IBL = 1 << 0,
     RAY_RECONSTRUCTION = 1 << 1,

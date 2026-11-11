@@ -1,19 +1,27 @@
 // SHARC defs
-#ifndef SHARC_QUERY
 #define SHARC_QUERY 1
-#endif
-
-#ifndef SHARC_UPDATE
-#define SHARC_UPDATE 1
-#endif
+#define SHARC_UPDATE 0
 
 //Holy shit, I think I love slang
 #include "bsdf.slang"
+#include "sharc_util.slang"
 
-// sharc shit
-#if SHARC_QUERY || SHARC_UPDATE
-#include "sharc.slang"
-#endif
+// SHARC 
+
+[vk::binding(5, 0)]
+RWStructuredBuffer<HashGridKey> sharcHashEntries;
+
+[vk::binding(6, 0)]
+RWStructuredBuffer<SharcAccumulationData> sharcAccumulation;
+
+[vk::binding(7, 0)]
+RWStructuredBuffer<SharcPackedData> sharcResolved;
+
+[vk::binding(8, 0)]
+StructuredBuffer<SharcConfig> sharcConfigBuffer;
+
+[vk::binding(9, 0)]
+RWStructuredBuffer<uint> sharcLockBuffer;
 
 //Inputs
 [vk::binding(0, 0)]
@@ -159,10 +167,11 @@ void rayGeneration() {
     float prevBsdfPdf = 0.f; // 0 when no light was sampled at the previous vertex (camera ray), so hitting a light gets the full weight
     
     float prevRoughness = 1.f;
-    #if SHARC_QUERY
-        SharcParameters params = createSharcParams(pc.camPos);
-    #endif
     
+    #if SHARC_QUERY
+        SharcParameters params = createSharcParams(pc.camPos, sharcConfigBuffer[0], sharcHashEntries, sharcAccumulation, sharcResolved, sharcLockBuffer);
+    #endif
+
     HitPayload payload = {};
     for (uint i = 0; i < pc.maxBounces; ++i) {
         payload.seed = seed;
@@ -330,6 +339,11 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
     }
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 worldNor = normalize(mul(ObjectToWorld3x4(), float4(mulNorTranspose(pointInfo, float3(0.f, 0.f, 1.f)), 0.f)));
+    
+    // fill query fields for SHARC
+    payload.hitLen = RayTCurrent();
+    payload.hitNor = normalize(mul(gNor, WorldToObject3x4()).xyz);
+    payload.roughness = pbr.metallicRoughness.y;
 
     // Light sampling, weighted against the chance of the BSDF sampling the same direction
     float3 gAlbedo;

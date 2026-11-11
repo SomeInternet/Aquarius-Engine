@@ -24,7 +24,7 @@ static_assert(sizeof(SharcConfig) == 16);
 static_assert(offsetof(SharcConfig, sceneScale) == 4);
 static_assert(offsetof(SharcConfig, radianceScale) == 8);
 static_assert(offsetof(SharcConfig, padding) == 12);
-static_assert(offsetof(PushDataSharcUpdate, pathtracer) == 0);
+static_assert(offsetof(PushDataSharc, pathtracer) == 0);
 static_assert(offsetof(PushConstantsResolve, hashEntriesAddress) == 40);
 static_assert(offsetof(PushConstantsResolve, accumulationAddress) == 48);
 static_assert(offsetof(PushConstantsResolve, resolvedAddress) == 56);
@@ -936,7 +936,7 @@ void Engine::updateSharc(VkCommandBuffer commandBuffer) {
 	memcpy(configBuffer.info.pMappedData, &config, sizeof(config));
 	_allocator.flush(configBuffer);
 
-	PushDataSharcUpdate push{};
+	PushDataSharc push{};
 	push.pathtracer = _pcpt;
 	push.hashEntriesAddress = _sharcHashEntries.address;
 	push.accumulationAddress = _sharcAccumulation.address;
@@ -1184,13 +1184,15 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 
 	int accumulationFrames = static_cast<int>(_sharcAccumulationFrameNum);
 	ImGui::SliderInt("SHaRC accumulation frames", &accumulationFrames, 1, 128);
+	if (static_cast<uint32_t>(accumulationFrames) != _sharcAccumulationFrameNum) _frameNum = 0;
 	_sharcAccumulationFrameNum = static_cast<uint32_t>(accumulationFrames);
 
 	int staleFrames = static_cast<int>(_sharcStaleFrameNumMax);
 	ImGui::SliderInt("SHaRC stale frames", &staleFrames, 8, 256);
+	if (static_cast<uint32_t>(staleFrames) != _sharcStaleFrameNumMax) _frameNum = 0;
 	_sharcStaleFrameNumMax = static_cast<uint32_t>(staleFrames);
 
-	ImGui::SliderFloat("SHaRC scene scale", &_sharcSceneScale, 1.f, 200.f);
+	if (ImGui::SliderFloat("SHaRC scene scale", &_sharcSceneScale, 1.f, 200.f)) _frameNum = 0;
 
 	float theta = _camera.getTheta();
 	ImGui::InputFloat("Theta", &theta);
@@ -1316,9 +1318,17 @@ void Engine::draw() {
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelinePathtracer);
 
+	PushDataSharc pushPt{};
+	pushPt.pathtracer = _pcpt;
+	pushPt.hashEntriesAddress = _sharcHashEntries.address;
+	pushPt.accumulationAddress = _sharcAccumulation.address;
+	pushPt.resolvedAddress = _sharcResolved.address;
+	pushPt.configAddress = getCurrFrame()._sharcConfigBuffer.address;
+	pushPt.lockAddress = _sharcLockBuffer.address;
+
 	VkPushDataInfoEXT pushDataPt{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
 	pushDataPt.offset = 0;
-	pushDataPt.data = { &_pcpt, sizeof(PushConstantsPathtracer) };
+	pushDataPt.data = { &pushPt, sizeof(pushPt)};
 	
 	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPt);
 	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_rayGenerationRegion, &_missRegion, &_hitRegion, &_callRegion, _renderExtent.width, _renderExtent.height, 1);
