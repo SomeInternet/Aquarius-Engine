@@ -22,6 +22,7 @@ struct FrameResources {
 
 	VkSemaphore _swapChainSemaphore{ VK_NULL_HANDLE }; //Wait to perform rendering operations on the GPU until the swap chain semaphore is signalled
 	VkFence _renderFence{ VK_NULL_HANDLE }; //Wait to record the command buffer until the fence is signalled
+	AllocatedBuffer _sharcConfigBuffer;
 };
 
 struct VkbData {
@@ -100,6 +101,8 @@ private:
 	VkCommandBuffer _immCommandBuffer;
 
 	VkPipeline _pipelinePathtracer;
+	VkPipeline _pipelineSharcUpdate;
+	VkPipeline _pipelineResolve;
 	VkPipeline _pipelinePost;
 
 	VkbData _vkbData;
@@ -154,6 +157,11 @@ private:
 	VkStridedDeviceAddressRegionKHR _callRegion{};
 
 	AllocatedBuffer _sbtBuffer;
+	AllocatedBuffer _sharcUpdateSbtBuffer;
+	VkStridedDeviceAddressRegionKHR _sharcUpdateRayGenerationRegion{};
+	VkStridedDeviceAddressRegionKHR _sharcUpdateMissRegion{};
+	VkStridedDeviceAddressRegionKHR _sharcUpdateHitRegion{};
+	VkStridedDeviceAddressRegionKHR _sharcUpdateCallRegion{};
 
 	AllocatedImage _radianceImage;
 	VkImageViewCreateInfo _radianceImageViewCreateInfo;
@@ -187,6 +195,21 @@ private:
 	VkImageViewCreateInfo _postInputImageInfo{};
 
 	std::chrono::steady_clock::time_point _start;
+	// SHaRC cache. Same entry count in every buffer; hash keys are 8 bytes and the
+	// other two records are 16. Cleared to zero, which is an empty hash slot.
+	AllocatedBuffer _sharcHashEntries;
+	AllocatedBuffer _sharcAccumulation;
+	AllocatedBuffer _sharcResolved;
+	AllocatedBuffer _sharcLockBuffer; // One uint32_t per hash entry; 0 = unlocked.
+
+	glm::vec3 _sharcCameraPositionPrev{ 0.f };
+	bool _sharcCameraInitialized{ false };
+	VkSemaphore _sharcSemaphore{ VK_NULL_HANDLE };
+	bool _sharcSemaphoreWait{ false };
+
+	float _sharcSceneScale{ 50.f };
+	uint32_t _sharcAccumulationFrameNum{ 8 };
+	uint32_t _sharcStaleFrameNumMax{ 64 };
 
 	//Deletion queue to handle object destruction
 	//TODO: VkGuide, from which I got this implementation, mentioned a better way to do it, so that's something I might want to look into
@@ -224,7 +247,13 @@ private:
 	void loadScene(const std::string &file);
 
 	void initPipelinePathtracer();
+	void initPipelineUpdate();
+	void initPipelineResolve();
 	void initPipelinePost();
+
+	void createSharcBuffers();
+	void updateSharc(VkCommandBuffer commandBuffer);
+	void resolveSharc(VkCommandBuffer commandBuffer);
 
 	void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 	void draw();

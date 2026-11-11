@@ -1,5 +1,6 @@
 struct PushConstants {
     uint32_t outputImageIdx;
+    uint32_t swapRedBlue;
 };
 
 [vk::push_constant]
@@ -8,8 +9,7 @@ PushConstants pushConstants;
 [[vk::binding(0, 0)]] 
 RWTexture2D<float4> radianceImage;
 
-[[vk::binding(1, 0)]] 
-[vk::image_format("rgba8")] 
+[[vk::binding(1, 0)]]
 RWTexture2D<float4> swapchainImages[];
 
 float3 reinhard(float3 color) {
@@ -32,6 +32,8 @@ void main(uint3 globalId: SV_DispatchThreadID, uint3 localId: SV_GroupThreadID) 
     if (globalId.x < size.x && globalId.y < size.y) {
         float3 color = gammaCorrect(reinhard(radianceImage[globalId.xy].rgb));
 
-        swapchainImages[pushConstants.outputImageIdx][globalId.xy] = float4(color, 1.f);
+        float4 displayed = float4(color, 1.f);
+        if (pushConstants.swapRedBlue != 0) displayed = displayed.bgra;
+        swapchainImages[pushConstants.outputImageIdx][globalId.xy] = displayed;
     }
 }
