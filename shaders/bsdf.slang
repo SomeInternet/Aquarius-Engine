@@ -263,6 +263,10 @@ inline void evalCookTorrance2(float3 wo, float3 wi, PBR pbr, out float3 bsdf, in
     float pDiffuse = (1.f - m) * (1.f - pbr.transmissiveness) * (1.f - fn);
     float pDielectric = 1.f - m - pDiffuse;
 
+    // Write out diffuse and specular albedos
+    diffuse = (pbr.color * (1.f - m)).xyz * (1.f - fn);
+    specular = m * f(pbr.color.xyz, wo, float3(0, 0, 1)) + (1.f - m) * fn;
+
     if (wi.z < 0) { // Transmissive
         float3 wh = normalize(pbr.etaA * wo + pbr.etaB * wi);
         if (wh.z < 0.f) wh = -wh;
@@ -285,10 +289,6 @@ inline void evalCookTorrance2(float3 wo, float3 wi, PBR pbr, out float3 bsdf, in
         float g = g(wo, wi, alpha2);
         float s = -absDotWiWh + absDotWoWh * pbr.etaA / pbr.etaB;
 
-        // Write out diffuse and specular albedos
-        specular = (pbr.color * (1.f - pbr.metallicRoughness.x)).xyz * (1.f - fn);
-        diffuse = pbr.color.xyz * f(pbr.color.xyz, wo, float3(0, 0, 1)) * fn;
-
         pdf = pDielectric * (R + T > 0.f ? T / (R + T) : 0.f) *
               d * g1(wo, alpha2) * absDotWoWh * absDotWiWh / (cosThetaO * s * s);
 
@@ -309,10 +309,6 @@ inline void evalCookTorrance2(float3 wo, float3 wi, PBR pbr, out float3 bsdf, in
         float g = g(wo, wi, alpha2);
 
         float denom = 4.f * cosThetaO;
-
-        //Write out diffuse and specular albedos
-        specular = (pbr.color * (1.f - pbr.metallicRoughness.x)).xyz * (1.f - fn);
-        diffuse = pbr.color.xyz * f(pbr.color.xyz, wo, float3(0, 0, 1)) * fn;
 
         // Set the bsdf and pdf values
         bsdf = m * d * g * f(pbr.color.rgb, wo, wh) / denom + // Metallic contribution

@@ -446,7 +446,7 @@ void Engine::updateRenderExtent() {
 	uint32_t optWidth, optHeight, minWidth, minHeight, maxWidth, maxHeight = 0;
 	float sharpness = 0.f;
 
-	NGX_DLSS_GET_OPTIMAL_SETTINGS(_ngxParams, _vkbData.swapChain.extent.width, _vkbData.swapChain.extent.height, NVSDK_NGX_PerfQuality_Value_MaxPerf,
+	NGX_DLSS_GET_OPTIMAL_SETTINGS(_ngxParams, _vkbData.swapChain.extent.width, _vkbData.swapChain.extent.height, NVSDK_NGX_PerfQuality_Value_MaxQuality,
 		&optWidth, &optHeight, &maxWidth, &maxHeight, &minWidth, &minHeight, &sharpness);
 	_renderExtent.width = optWidth;
 	_renderExtent.height = optHeight;
@@ -907,6 +907,38 @@ void Engine::draw() {
 
 	//Call the pathtracer
 	if (_camera.wasDirty()) _frameNum = 0; //Reset the frame if the camera's view or rotation changed
+
+	if (_scene.animated) {
+		_frameNum = 0;
+
+		auto now = std::chrono::steady_clock::now();
+		auto time = std::chrono::duration<float>(now - _start).count();
+
+		int frameIdx = _totalFrames % FRAMES_IN_FLIGHT;
+
+		loader::updateScene(_device, _allocator, _scene, _dispatchTable, time, frameIdx);
+
+		//Rebuild the TLAS
+
+		uint32_t instanceCount = _scene.instanceNodes.size();
+
+		VkAccelerationStructureBuildRangeInfoKHR tlasRange{};
+		tlasRange.primitiveCount = instanceCount;
+
+		const VkAccelerationStructureBuildRangeInfoKHR *pTlasRange = &tlasRange;
+		_dispatchTable.cmdBuildAccelerationStructuresKHR(commandBuffer, 1, &_scene.tlas.buildInfo, &pTlasRange);
+
+		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		barrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+		barrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+		VkDependencyInfo dependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		dependency.memoryBarrierCount = 1;
+		dependency.pMemoryBarriers = &barrier;
+
+		vkCmdPipelineBarrier2(commandBuffer, &dependency);
+	}
 		
 	_camera.toPushConstantsPathtracer(_pcpt);
 	_pcpt.frameNum = _frameNum;
@@ -1088,13 +1120,15 @@ void Engine::init() {
 	_loaded = true;
 
 	//Load default scene
-	std::string path = "./models/cornellbox_transmission.glb";
+	std::string path = "./models/cornellbox_anims.glb";
 	loadScene(path);
 
 	initPipelinePathtracer();
 	initPipelinePost();
 
 	initImgui();
+
+	_start = std::chrono::steady_clock::now();
 }
 
 void Engine::run() {

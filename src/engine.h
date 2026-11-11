@@ -5,6 +5,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <VkBootstrap.h>
+#include <chrono>
 
 #include "imgui.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -185,7 +186,7 @@ private:
 	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 
-	//TODO: Allocate images for ORCA/SHaRC here
+	std::chrono::steady_clock::time_point _start;
 
 	//Deletion queue to handle object destruction
 	//TODO: VkGuide, from which I got this implementation, mentioned a better way to do it, so that's something I might want to look into
@@ -236,7 +237,7 @@ private:
 	bool _minimized{ false };
 
 	//Helpers
-	inline FrameResources &getCurrFrame() { return _frameResources[_frameNum % FRAMES_IN_FLIGHT]; }
+	inline FrameResources &getCurrFrame() { return _frameResources[_totalFrames % FRAMES_IN_FLIGHT]; }
 
 public:
 	void init();
