@@ -69,4 +69,5 @@ namespace util {
 enum EngineStateFlags: uint32_t {
 	IBL = 1 << 0,
 	RAY_RECONSTRUCTION = 1 << 1,
+	AA_JITTER = 1 << 2,
 };

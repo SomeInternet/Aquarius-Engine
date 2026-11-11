@@ -32,11 +32,11 @@ static_assert(offsetof(PushConstantsResolve, capacity) == 64);
 static_assert(offsetof(PushConstantsResolve, frameIndex) == 80);
 
 //Helpers to, uh, help us set up the descriptors for the shaders
-static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, VkSpirvResourceTypeFlagsEXT mask, 
+static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, uint32_t set, VkSpirvResourceTypeFlagsEXT mask, 
 	VkDeviceSize heapOffset, VkDeviceSize heapArrayStride) {
 
 	VkDescriptorSetAndBindingMappingEXT mapping{ .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT };
-	mapping.descriptorSet = 0;
+	mapping.descriptorSet = set;
 	mapping.firstBinding = binding;
 	mapping.bindingCount = 1;
 	mapping.resourceMask = mask;
@@ -46,9 +46,9 @@ static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, VkSpirv
 	return mapping;
 }
 
-static VkDescriptorSetAndBindingMappingEXT pushAddressMapping(uint32_t binding, VkSpirvResourceTypeFlagsEXT mask, uint32_t pushOffset) {
+static VkDescriptorSetAndBindingMappingEXT pushAddressMapping(uint32_t binding, uint32_t set, VkSpirvResourceTypeFlagsEXT mask, uint32_t pushOffset) {
 	VkDescriptorSetAndBindingMappingEXT mapping{ .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT };
-	mapping.descriptorSet = 0;
+	mapping.descriptorSet = set;
 	mapping.firstBinding = binding;
 	mapping.bindingCount = 1; 
 	mapping.resourceMask = mask;
@@ -485,8 +485,10 @@ void Engine::updateRenderExtent() {
 
 	NGX_DLSS_GET_OPTIMAL_SETTINGS(_ngxParams, _vkbData.swapChain.extent.width, _vkbData.swapChain.extent.height, NVSDK_NGX_PerfQuality_Value_MaxQuality,
 		&optWidth, &optHeight, &maxWidth, &maxHeight, &minWidth, &minHeight, &sharpness);
-	_renderExtent.width = optWidth;
-	_renderExtent.height = optHeight;
+	//_renderExtent.width = optWidth;
+	//_renderExtent.height = optHeight;
+	_renderExtent.width = _vkbData.swapChain.extent.width;
+	_renderExtent.height = _vkbData.swapChain.extent.height;
 #else
 	_renderExtent = _swapChainExtent;
 #endif
@@ -662,19 +664,26 @@ void Engine::initPipelinePathtracer() {
 
 	//Create the bindings for the resources
 	std::array mappings = {
-		heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
-		heapMapping(1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 1 * imageStride, 0), //Radiance Image
-		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 2 * imageStride, 0), //Radiance Image
-		heapMapping(3, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 3 * imageStride, 0), //Radiance Image
-		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 4 * imageStride, 0), //Radiance Image
-		heapMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 5 * imageStride, 0), //Radiance Image
-		heapMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 6 * imageStride, 0), //Radiance Image
-		heapMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 7 * imageStride, 0), //Radiance Image
-		heapMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 8 * imageStride, 0), //Radiance Image
-		heapMapping(9, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
-		heapMapping(10, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
-		pushAddressMapping(11, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushConstantsPathtracer, tlas)), //Tlas
-		heapMapping(12, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
+		//Set 0 is for SHaRC
+		heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
+		heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
+		heapMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
+		pushAddressMapping(3, 0, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharcUpdate, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
+		heapMapping(4, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
+		pushAddressMapping(5, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, hashEntriesAddress)),
+		pushAddressMapping(6, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, accumulationAddress)),
+		pushAddressMapping(7, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, resolvedAddress)),
+		pushAddressMapping(8, 0, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, configAddress)),
+		pushAddressMapping(9, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, lockAddress)),
+		//Set 1 is for the DLSS/ORCA images
+		heapMapping(0, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 1 * imageStride, 0), //Diffuse albedo
+		heapMapping(1, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 2 * imageStride, 0), //Specular albedo
+		heapMapping(2, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 3 * imageStride, 0), //Normal/roughness
+		heapMapping(3, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 4 * imageStride, 0), //Depth
+		heapMapping(4, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 5 * imageStride, 0), //Motion vectors
+		heapMapping(5, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 6 * imageStride, 0), //Specular hit distance
+		heapMapping(6, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 7 * imageStride, 0), //DLSS output
+		heapMapping(7, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 8 * imageStride, 0), //ORCA albedo
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -778,16 +787,16 @@ void Engine::initPipelineUpdate() {
 
 	//Create the bindings for the resources
 	std::array mappings = {
-		heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
-		heapMapping(1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
-		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
-		pushAddressMapping(3, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharcUpdate, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
-		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
-		pushAddressMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, hashEntriesAddress)),
-		pushAddressMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, accumulationAddress)),
-		pushAddressMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, resolvedAddress)),
-		pushAddressMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, configAddress)),
-		pushAddressMapping(9, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, lockAddress)),
+		heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
+		heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
+		heapMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
+		pushAddressMapping(3, 0, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharcUpdate, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
+		heapMapping(4, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
+		pushAddressMapping(5, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, hashEntriesAddress)),
+		pushAddressMapping(6, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, accumulationAddress)),
+		pushAddressMapping(7, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, resolvedAddress)),
+		pushAddressMapping(8, 0, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, configAddress)),
+		pushAddressMapping(9, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, lockAddress)),
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -950,9 +959,9 @@ void Engine::initPipelineResolve() {
 	VkShaderModule moduleResolve = util::loadShaderModule("./build/shaders/resolve.spv", _device);
 
 	std::array mappings = {
-		pushAddressMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, hashEntriesAddress)),
-		pushAddressMapping(1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, accumulationAddress)),
-		pushAddressMapping(2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, resolvedAddress))
+		pushAddressMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, hashEntriesAddress)),
+		pushAddressMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, accumulationAddress)),
+		pushAddressMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, resolvedAddress))
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -1064,8 +1073,8 @@ void Engine::initPipelinePost() {
 	VkDeviceSize imageStride = _imageHeapLayout.stride;
 
 	std::array mappings = {
-	heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0),
-	heapMapping(1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, ENGINE_IMAGES * imageStride, imageStride)
+	heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0),
+	heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, ENGINE_IMAGES * imageStride, imageStride)
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -1325,6 +1334,9 @@ void Engine::draw() {
 		//Call the post process
 		PushConstantsPost pcp{};
 		pcp.outputImageIdx = swapChainImageIndex;
+		// Storage writes map shader component 0 onto the format's first channel.
+		// For B8G8R8A8 that channel is blue, so the post shader swaps R and B.
+		pcp.swapRedBlue = _swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM ? 1 : 0;
 
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
 		VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
@@ -1371,19 +1383,6 @@ void Engine::draw() {
 
 		vkCmdBlitImage2(commandBuffer, &blitInfo);
 	}
-	//Call the post process
-	PushConstantsPost pcp{};
-	pcp.outputImageIdx = swapChainImageIndex;
-	// Storage writes map shader component 0 onto the format's first channel.
-	// For B8G8R8A8 that channel is blue, so the post shader swaps R and B.
-	pcp.swapRedBlue = _swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM ? 1u : 0u;
-	
-	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
-	VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
-	pushDataPost.offset = 0;
-	pushDataPost.data = { &pcp, sizeof(PushConstantsPost) };
-	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPost);
-	vkCmdDispatch(commandBuffer, (_swapChainExtent.width + 15) / 16, (_swapChainExtent.height + 15) / 16, 1);
 
 	if (_showGui) {
 		util::transitionImageLayout(commandBuffer, swapChainImage, swapChainLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);

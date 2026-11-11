@@ -40,27 +40,6 @@ RWStructuredBuffer<uint> sharcLockBuffer;
 [vk::binding(0, 0)]
 RWTexture2D<float4> radianceImage;
 
-[vk::binding(0, 1)]
-RWTexture2D<float4> diffuseAlbedoImage;
-
-[vk::binding(0, 2)]
-RWTexture2D<float4> specularAlbedoImage;
-
-[vk::binding(0, 3)]
-RWTexture2D<float4> normalRoughnessImage;
-
-[vk::binding(0, 4)]
-RWTexture2D<float4> depthImage;
-
-[vk::binding(0, 5)]
-RWTexture2D<float4> motionVectorImage;
-
-[vk::binding(0, 6)]
-RWTexture2D<float4> specHitDistImage;
-
-[vk::binding(0, 7)]
-RWTexture2D<float4> dlssOutputImage;
-
 [vk::binding(1, 0)] //TODO: Change this if you change the max number of swap chain images
 Texture2D<float4> sceneImages[];
 
@@ -72,6 +51,31 @@ RaytracingAccelerationStructure tlas;
 
 [vk::binding(4, 0)]
 Texture2D<float4> hdrImage;
+
+// G-buffer, DLSS and ORCA images: set 1, mirroring pathtracer.slang (unused by the update pass)
+[vk::binding(0, 1)]
+RWTexture2D<float4> diffuseAlbedoImage;
+
+[vk::binding(1, 1)]
+RWTexture2D<float4> specularAlbedoImage;
+
+[vk::binding(2, 1)]
+RWTexture2D<float4> normalRoughnessImage;
+
+[vk::binding(3, 1)]
+RWTexture2D<float4> depthImage;
+
+[vk::binding(4, 1)]
+RWTexture2D<float4> motionVectorImage;
+
+[vk::binding(5, 1)]
+RWTexture2D<float4> specHitDistImage;
+
+[vk::binding(6, 1)]
+RWTexture2D<float4> dlssOutputImage;
+
+[vk::binding(7, 1)]
+RWTexture2D<float4> orcaAlbedoImage;
 
 [[vk::push_constant]]
 PushConstantsPathtracer pc;
