@@ -1,15 +1,10 @@
 // SHARC defs
-#ifndef SHARC_QUERY
 #define SHARC_QUERY 1
-#endif
-
-#ifndef SHARC_UPDATE
-#define SHARC_UPDATE 0 
-#endif
+#define SHARC_UPDATE 0
 
 //Holy shit, I think I love slang
 #include "bsdf.slang"
-#include "sharc.slang"
+#include "sharc_util.slang"
 
 // SHARC 
 
@@ -339,6 +334,11 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
     }
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 worldNor = normalize(mul(ObjectToWorld3x4(), float4(mulNorTranspose(pointInfo, float3(0.f, 0.f, 1.f)), 0.f)));
+    
+    // fill query fields for SHARC
+    payload.hitLen = RayTCurrent();
+    payload.hitNor = normalize(mul(gNor, WorldToObject3x4()).xyz);
+    payload.roughness = pbr.metallicRoughness.y;
 
     //Light sampling, weighted against the chance of the BSDF sampling the same direction
     {

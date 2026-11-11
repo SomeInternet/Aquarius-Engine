@@ -6,6 +6,7 @@
 // #define SCENE_SCALE 50.0f
 // #define RADIANCE_SCALE 1e3f
 
+// GPU side reads
 struct SharcConfig
 {
     uint entriesNum;
@@ -32,16 +33,15 @@ SharcParameters createSharcParams(
         SHARC_GRID_LEVEL_BIAS 
     };
 
-    HashGridData gridData = {
-        config.entriesNum,
-        sharcHashEntries
-    };
+    HashGridData gridData;
+    gridData.capacity = config.entriesNum;
+    gridData.hashEntriesBuffer = sharcHashEntries;
 
     params.hashGridData = gridData;
     params.hashGridParameters = gridParams;
 
     #if !HASH_GRID_ENABLE_64_BIT_ATOMICS
-        parameters.hashGridData.lockBuffer = sharcLockBuffer;
+        params.hashGridData.lockBuffer = sharcLockBuffer;
     #endif
 
     params.radianceScale = config.radianceScale;

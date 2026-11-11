@@ -24,7 +24,7 @@ static_assert(sizeof(SharcConfig) == 16);
 static_assert(offsetof(SharcConfig, sceneScale) == 4);
 static_assert(offsetof(SharcConfig, radianceScale) == 8);
 static_assert(offsetof(SharcConfig, padding) == 12);
-static_assert(offsetof(PushDataSharcUpdate, pathtracer) == 0);
+static_assert(offsetof(PushDataSharc, pathtracer) == 0);
 static_assert(offsetof(PushConstantsResolve, hashEntriesAddress) == 40);
 static_assert(offsetof(PushConstantsResolve, accumulationAddress) == 48);
 static_assert(offsetof(PushConstantsResolve, resolvedAddress) == 56);
@@ -653,6 +653,11 @@ void Engine::initPipelinePathtracer() {
 		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
 		pushAddressMapping(3, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushConstantsPathtracer, tlas)), //Tlas
 		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
+		pushAddressMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, hashEntriesAddress)),
+		pushAddressMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, accumulationAddress)),
+		pushAddressMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
+		pushAddressMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT,  offsetof(PushDataSharc, configAddress)),
+		pushAddressMapping(9, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -759,13 +764,13 @@ void Engine::initPipelineUpdate() {
 		heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
 		heapMapping(1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
 		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
-		pushAddressMapping(3, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharcUpdate, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
+		pushAddressMapping(3, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
 		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
-		pushAddressMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, hashEntriesAddress)),
-		pushAddressMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, accumulationAddress)),
-		pushAddressMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, resolvedAddress)),
-		pushAddressMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, configAddress)),
-		pushAddressMapping(9, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, lockAddress)),
+		pushAddressMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, hashEntriesAddress)),
+		pushAddressMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, accumulationAddress)),
+		pushAddressMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
+		pushAddressMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, configAddress)),
+		pushAddressMapping(9, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -905,7 +910,7 @@ void Engine::updateSharc(VkCommandBuffer commandBuffer) {
 	memcpy(configBuffer.info.pMappedData, &config, sizeof(config));
 	_allocator.flush(configBuffer);
 
-	PushDataSharcUpdate push{};
+	PushDataSharc push{};
 	push.pathtracer = _pcpt;
 	push.hashEntriesAddress = _sharcHashEntries.address;
 	push.accumulationAddress = _sharcAccumulation.address;
@@ -1222,9 +1227,17 @@ void Engine::draw() {
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelinePathtracer);
 
+	PushDataSharc pushPt{};
+	pushPt.pathtracer = _pcpt;
+	pushPt.hashEntriesAddress = _sharcHashEntries.address;
+	pushPt.accumulationAddress = _sharcAccumulation.address;
+	pushPt.resolvedAddress = _sharcResolved.address;
+	pushPt.configAddress = getCurrFrame()._sharcConfigBuffer.address;
+	pushPt.lockAddress = _sharcLockBuffer.address;
+
 	VkPushDataInfoEXT pushDataPt{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
 	pushDataPt.offset = 0;
-	pushDataPt.data = { &_pcpt, sizeof(PushConstantsPathtracer) };
+	pushDataPt.data = { &pushPt, sizeof(pushPt)};
 	
 	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPt);
 	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_rayGenerationRegion, &_missRegion, &_hitRegion, &_callRegion, _renderExtent.width, _renderExtent.height, 1);

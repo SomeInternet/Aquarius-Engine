@@ -51,7 +51,7 @@ constexpr float SHARC_RADIANCE_SCALE = 1e3f;
 constexpr float SHARC_LOGARITHM_BASE = 2.f;
 constexpr float SHARC_LEVEL_BIAS = 0.f;
 
-// Match SharcConfig shaders/update.slang
+// Match SharcConfig shaders/sharc.slang
 struct SharcConfig {
 	uint32_t entriesNum{ SHARC_CAPACITY };
 	float sceneScale{ 50.f };
@@ -60,7 +60,7 @@ struct SharcConfig {
 };
 
 // Supply bindings 5-9 to update.slang
-struct PushDataSharcUpdate {
+struct PushDataSharc {
 	PushConstantsPathtracer pathtracer;
 	VkDeviceAddress hashEntriesAddress;
 	VkDeviceAddress accumulationAddress;
