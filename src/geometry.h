@@ -59,8 +59,8 @@ struct AccelerationStructure {
 	VkAccelerationStructureKHR as{};
 	AllocatedBuffer buffer;
 
-	VkAccelerationStructureGeometryKHR geometry;
-	VkAccelerationStructureBuildGeometryInfoKHR buildInfo;
+	VkAccelerationStructureGeometryKHR geometry{};
+	VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
 
 	VkDeviceAddress address; //For instancing
 };

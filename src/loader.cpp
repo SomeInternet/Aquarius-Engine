@@ -117,8 +117,12 @@ static AccelerationStructure createAccelerationStructure(vkb::DispatchTable &dis
     buildInfo.dstAccelerationStructure = newAS.as;
     buildInfo.scratchData.deviceAddress = scratchBuffer.address;
 
+    //Keep copies for rebuilding later
     newAS.buildInfo = buildInfo;
-    if (buildInfo.pGeometries && buildInfo.geometryCount == 1) newAS.geometry = *(buildInfo.pGeometries); newAS.buildInfo.pGeometries = &newAS.geometry;
+    newAS.buildInfo.pGeometries = nullptr;
+    if (buildInfo.pGeometries && buildInfo.geometryCount == 1) {
+        newAS.geometry = *buildInfo.pGeometries;
+    }
 
     return newAS;
 }
@@ -582,7 +586,8 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
         VMA_MEMORY_USAGE_GPU_ONLY, false);
 
     newScene.nodes.resize(model.nodes.size());
-    newScene.nodeTransforms.resize(model.nodes.size());
+    newScene.nodeTransforms.resize(model.nodes.size(), glm::mat4(1.f));
+    newScene.prevNodeTransforms.resize(model.nodes.size(), glm::mat4(1.f));
     //Traverse the scene graph to load instances
     std::vector<Instance> emissiveInstances;
     std::vector<Instance> instances;
@@ -614,13 +619,9 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
             anim.animSamplers.emplace_back();
             auto &samp = anim.animSamplers.back();
 
-            const auto &inputAccessor = model.accessors[sampler.input];
-            const auto &inputBufferView = model.bufferViews[inputAccessor.bufferView];
-            const auto &inputBuffer = model.buffers[inputBufferView.buffer];
-
             //Read in the times
             samp.times = readAccessorFloats(model, sampler.input);
-            anim.duration = std::max(anim.duration, *std::max_element(samp.times.begin(), samp.times.end()));
+            if (!samp.times.empty()) anim.duration = std::max(anim.duration, *std::max_element(samp.times.begin(), samp.times.end()));
             
             //Read in the keyframe values
             const auto &outputAccessor = model.accessors[sampler.output];
@@ -646,18 +647,6 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
             else if (channel.target_path == "scale") chan.type = AnimationType::SCALE;
             else chan.type = AnimationType::UNSUPPORTED;
         }
-
-        const auto &sampler = animation.samplers[0];
-
-        //Inputs are the timestamps
-        const auto &inputAccessor = model.accessors[sampler.input];
-        const auto &inputBufferView = model.bufferViews[inputAccessor.bufferView];
-        const auto &inputBuffer = model.buffers[inputBufferView.buffer];
-
-        //Outputs are the actual keyframe values
-        const auto &outputAccessor = model.accessors[sampler.output];
-        const auto &outputBufferView = model.bufferViews[outputAccessor.bufferView];
-        const auto &outputBuffer = model.buffers[outputBufferView.buffer];
     }
 
     //Assumes static lights
@@ -832,8 +821,12 @@ void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, v
         float t = anim.duration > 0.f ? std::fmod(time, anim.duration) : 0.f;
 
         for (auto &chan : anim.animChannels) {
+            if (chan.type == AnimationType::UNSUPPORTED) continue;
+            if (chan.node < 0 || chan.node >= static_cast<int>(scene.nodes.size())) continue;
+            if (chan.sampler < 0 || chan.sampler >= static_cast<int>(anim.animSamplers.size())) continue;
+
             AnimSampler &samp = anim.animSamplers[chan.sampler];
-            if (samp.times.empty()) continue;
+            if (samp.times.empty() || samp.values.size() < samp.times.size()) continue;
 
             int i, j;
             float x;
@@ -853,18 +846,19 @@ void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, v
     }
 
     //Update node transformations
-    scene.prevNodeTransforms = std::move(scene.nodeTransforms);
-    scene.nodeTransforms.resize(scene.prevNodeTransforms.size());
-    for (int i = 0; i < scene.updateOrder.size(); ++i) {
-        auto &node = scene.nodes[scene.updateOrder[i]];
+    scene.prevNodeTransforms = scene.nodeTransforms;
+    scene.nodeTransforms.resize(scene.nodes.size(), glm::mat4(1.f));
+    for (int nodeIdx : scene.updateOrder) {
+        const Node &node = scene.nodes[nodeIdx];
+        glm::mat4 local = glm::translate(node.trans) * glm::toMat4(node.rot) * glm::scale(node.scale);
 
-        scene.nodeTransforms[i] = ((node.parent == -1) ? glm::mat4(1.f) : scene.nodeTransforms[node.parent]) *
-            glm::translate(node.trans) * glm::toMat4(node.rot) * glm::scale(node.scale);
+        scene.nodeTransforms[nodeIdx] = (node.parent == -1) ? local : scene.nodeTransforms[node.parent] * local;
     }
 
     //Propagate changes to the instance buffer
+    auto *instanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(scene.instanceBuffers[frameIdx].info.pMappedData);
     for (int i = 0; i < scene.instanceNodes.size(); ++i) {
-        auto *instanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(scene.instanceBuffers[frameIdx].info.pMappedData);
+        if (scene.instanceNodes[i] < 0) continue;
 
         //Vulkan instances have a row-major transform matrix that is 3 by 4
         glm::mat4 transformRowMajor = glm::transpose(scene.nodeTransforms[scene.instanceNodes[i]]);

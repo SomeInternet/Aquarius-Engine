@@ -919,14 +919,30 @@ void Engine::draw() {
 		loader::updateScene(_device, _allocator, _scene, _dispatchTable, time, frameIdx);
 
 		//Rebuild the TLAS
+		VkAccelerationStructureGeometryKHR tlasGeometry = _scene.tlas.geometry;
+		tlasGeometry.geometry.instances.data.deviceAddress = _scene.instanceBuffers[frameIdx].address;
+
+		VkAccelerationStructureBuildGeometryInfoKHR tlasBuildInfo = _scene.tlas.buildInfo;
+		tlasBuildInfo.pGeometries = &tlasGeometry;
 
 		uint32_t instanceCount = _scene.instanceNodes.size();
 
 		VkAccelerationStructureBuildRangeInfoKHR tlasRange{};
 		tlasRange.primitiveCount = instanceCount;
 
+		//The TLAS and its scratch buffer are shared by every frame in flight
+		VkMemoryBarrier2 preBuildBarrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		preBuildBarrier.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		preBuildBarrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+		preBuildBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		preBuildBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+		VkDependencyInfo preBuildDependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		preBuildDependency.memoryBarrierCount = 1;
+		preBuildDependency.pMemoryBarriers = &preBuildBarrier;
+		vkCmdPipelineBarrier2(commandBuffer, &preBuildDependency);
+
 		const VkAccelerationStructureBuildRangeInfoKHR *pTlasRange = &tlasRange;
-		_dispatchTable.cmdBuildAccelerationStructuresKHR(commandBuffer, 1, &_scene.tlas.buildInfo, &pTlasRange);
+		_dispatchTable.cmdBuildAccelerationStructuresKHR(commandBuffer, 1, &tlasBuildInfo, &pTlasRange);
 
 		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
 		barrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
@@ -993,7 +1009,6 @@ void Engine::draw() {
 		VkClearColorValue clearValue = { { 0.f, 0.f, 0.f, 1.f } };
 		vkCmdClearColorImage(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearValue, 1, &clearRange);
 
-		//GENERAL -> GENERAL barrier so the pathtracer's writes are visible to the blit
 		util::transitionImageLayout(commandBuffer, debugImage->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
 
 		VkImageBlit2 blitRegion{ .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2 };
