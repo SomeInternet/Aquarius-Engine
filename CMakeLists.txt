@@ -105,7 +105,11 @@ endif()
 
 # slangc ships in the Vulkan SDK's Bin directory.
 find_program(AQUARIUS_SLANGC slangc
-    HINTS $ENV{VULKAN_SDK}/Bin ${Vulkan_INCLUDE_DIR}/../Bin
+    HINTS
+        $ENV{VULKAN_SDK}/Bin
+        $ENV{VULKAN_SDK}/bin
+        ${Vulkan_INCLUDE_DIR}/../Bin
+        ${Vulkan_INCLUDE_DIR}/../bin
     REQUIRED
 )
 
