@@ -323,6 +323,9 @@ void closestHit(inout UpdateHitPayload payload, in BuiltInTriangleIntersectionAt
 
             //SHARC local radiance
             payload.sharcLocalRadiance = emittedRadiance;
+            payload.sharcPositionWorld = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+            payload.sharcNormalWorld = normalize(mul(gNor, WorldToObject3x4()).xyz);
+            payload.sharcSurfaceValid = 1;
             payload.throughput = emittedRadiance;
             payload.throughput.b = min(-payload.throughput.b, -EPSILON);
 
