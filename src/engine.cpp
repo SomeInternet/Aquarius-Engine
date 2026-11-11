@@ -1152,7 +1152,6 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	_sharcStaleFrameNumMax = static_cast<uint32_t>(staleFrames);
 
 	if (ImGui::SliderFloat("SHaRC scene scale", &_sharcSceneScale, 1.f, 200.f)) _frameNum = 0;
-	ImGui::SliderFloat("SHaRC scene scale", &_sharcSceneScale, 1.f, 200.f);
 
 	float theta = _camera.getTheta();
 	ImGui::InputFloat("Theta", &theta);
