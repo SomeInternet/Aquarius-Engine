@@ -51,6 +51,27 @@ constexpr float SHARC_RADIANCE_SCALE = 1e3f;
 constexpr float SHARC_LOGARITHM_BASE = 2.f;
 constexpr float SHARC_LEVEL_BIAS = 0.f;
 
+// Match SharcConfig shaders/update.slang
+struct SharcConfig {
+	uint32_t entriesNum{ SHARC_CAPACITY };
+	float sceneScale{ 50.f };
+	float radianceScale{ SHARC_RADIANCE_SCALE };
+	uint32_t padding{ 0 };
+};
+
+// Supply bindings 5-9 to update.slang
+struct PushDataSharcUpdate {
+	PushConstantsPathtracer pathtracer;
+	VkDeviceAddress hashEntriesAddress;
+	VkDeviceAddress accumulationAddress;
+	VkDeviceAddress resolvedAddress;
+	VkDeviceAddress configAddress;
+	VkDeviceAddress lockAddress;
+};
+
+// Must match SHARC_TILE_SIZE in shaders/update.slang.
+constexpr uint32_t SHARC_UPDATE_TILE_SIZE = 5;
+
 struct PushConstantsResolve {
 	glm::vec3 cameraPosition;
 	float logarithmBase;

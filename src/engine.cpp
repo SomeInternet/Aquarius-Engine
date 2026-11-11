@@ -20,6 +20,11 @@
 #include "aliastable.h"
 
 static_assert(sizeof(glm::vec3) == 12, "SHaRC push constants assume a packed vec3");
+static_assert(sizeof(SharcConfig) == 16);
+static_assert(offsetof(SharcConfig, sceneScale) == 4);
+static_assert(offsetof(SharcConfig, radianceScale) == 8);
+static_assert(offsetof(SharcConfig, padding) == 12);
+static_assert(offsetof(PushDataSharcUpdate, pathtracer) == 0);
 static_assert(offsetof(PushConstantsResolve, hashEntriesAddress) == 40);
 static_assert(offsetof(PushConstantsResolve, accumulationAddress) == 48);
 static_assert(offsetof(PushConstantsResolve, resolvedAddress) == 56);
@@ -742,16 +747,135 @@ void Engine::initPipelinePathtracer() {
 	_deletionQueue.push([this]() { _allocator.destroyBuffer(_sbtBuffer); });
 }
 
+void Engine::initPipelineUpdate() {
+	//Initialize Vulkan raytracing objects
+
+	VkShaderModule moduleUpdate = util::loadShaderModule("./build/shaders/update.spv", _device);
+
+	VkDeviceSize imageStride = _imageHeapLayout.stride;
+
+	//Create the bindings for the resources
+	std::array mappings = {
+		heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
+		heapMapping(1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
+		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
+		pushAddressMapping(3, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharcUpdate, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
+		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
+		pushAddressMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, hashEntriesAddress)),
+		pushAddressMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, accumulationAddress)),
+		pushAddressMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, resolvedAddress)),
+		pushAddressMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, configAddress)),
+		pushAddressMapping(9, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharcUpdate, lockAddress)),
+	};
+
+	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
+	mappingInfo.mappingCount = static_cast<uint32_t>(mappings.size());
+	mappingInfo.pMappings = mappings.data();
+
+	//Lambda that defines a shader stage
+	auto stageInfo = [&](VkShaderStageFlagBits flag, const char *entry) {
+		VkPipelineShaderStageCreateInfo info{ .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+		info.pNext = &mappingInfo;
+		info.stage = flag;
+		info.module = moduleUpdate;
+		info.pName = entry;
+		return info;
+		};
+
+	std::array stages = {
+		stageInfo(VK_SHADER_STAGE_RAYGEN_BIT_KHR, "rayGeneration"),
+		stageInfo(VK_SHADER_STAGE_MISS_BIT_KHR, "miss"),
+		stageInfo(VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR, "closestHit"),
+		stageInfo(VK_SHADER_STAGE_ANY_HIT_BIT_KHR, "anyHit")
+		};
+
+	//A VkRayTracingShaderGroupTypeKHR bundles together related ray tracing shader stages
+	auto group = [](VkRayTracingShaderGroupTypeKHR type, uint32_t general, uint32_t closestHit, uint32_t anyHit) {
+		VkRayTracingShaderGroupCreateInfoKHR info{ .sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR };
+		info.type = type;
+		info.generalShader = general;
+		info.closestHitShader = closestHit;
+		info.anyHitShader = anyHit;
+		info.intersectionShader = VK_SHADER_UNUSED_KHR; //Apparently this is for custom procedural geometry/non-triangular primitives...
+		return info;
+		};
+
+	//General is for standalone shaders that don't directly participate in a geometry hit/miss lookup
+	//Triangle hit is pretty true to the name.
+	std::array groups = {
+		group(VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR, 0, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR), //Set the ray generation shader
+		group(VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR, 1, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR), //Set the miss shader
+		group(VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR, VK_SHADER_UNUSED_KHR, 2, VK_SHADER_UNUSED_KHR), //Set the closest and any hit shaders
+	};
+
+	VkPipelineCreateFlags2CreateInfo flags{.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO};
+	flags.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+
+	VkRayTracingPipelineCreateInfoKHR pipelineInfo{ .sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
+	pipelineInfo.pNext = &flags;
+	pipelineInfo.stageCount = stages.size();
+	pipelineInfo.pStages = stages.data();
+	pipelineInfo.groupCount = groups.size();
+	pipelineInfo.pGroups = groups.data();
+	pipelineInfo.maxPipelineRayRecursionDepth = 2;
+	pipelineInfo.layout = VK_NULL_HANDLE; //We're using descriptor heaps
+
+	VK_CHECK(_dispatchTable.createRayTracingPipelinesKHR(VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_pipelineSharcUpdate));
+
+	vkDestroyShaderModule(_device, moduleUpdate, nullptr);
+
+	_deletionQueue.push([this]() {vkDestroyPipeline(_device, _pipelineSharcUpdate, nullptr); });
+
+	//Create the shader binding table
+	auto &rt = _deviceProperties.rtProperties;
+	uint32_t handleSize = rt.shaderGroupHandleSize;
+	VkDeviceSize handleStride = util::alignUp(handleSize, rt.shaderGroupHandleAlignment);
+
+	_sharcUpdateRayGenerationRegion.stride = util::alignUp(handleStride, rt.shaderGroupBaseAlignment);
+	_sharcUpdateRayGenerationRegion.size = _sharcUpdateRayGenerationRegion.stride;
+
+	_sharcUpdateMissRegion.stride = handleStride;
+	_sharcUpdateMissRegion.size = util::alignUp(handleStride, rt.shaderGroupBaseAlignment);
+
+	_sharcUpdateHitRegion.stride = handleStride;
+	_sharcUpdateHitRegion.size = util::alignUp(handleStride, rt.shaderGroupBaseAlignment);
+
+	std::vector<uint8_t> handles(groups.size() * handleSize);
+	VK_CHECK(_dispatchTable.getRayTracingShaderGroupHandlesKHR(_pipelineSharcUpdate, 0, groups.size(), handles.size(), handles.data()));
+
+	_sharcUpdateSbtBuffer = _allocator.createBuffer(_sharcUpdateRayGenerationRegion.size + _sharcUpdateMissRegion.size + _sharcUpdateHitRegion.size + _sharcUpdateCallRegion.size,
+		VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, VMA_MEMORY_USAGE_CPU_TO_GPU, true, rt.shaderGroupBaseAlignment);
+
+	//Write the handles into the shader binding table
+	//Shaders hold records (handles and data), where handles reference groups (bundled shaders called together)
+	uint8_t *sbt = reinterpret_cast<uint8_t *> (_sharcUpdateSbtBuffer.info.pMappedData);
+	memcpy(sbt, handles.data() + 0 * handleSize, handleSize);
+	memcpy(sbt + _sharcUpdateRayGenerationRegion.size, handles.data() + 1 * handleSize, handleSize);
+	memcpy(sbt + _sharcUpdateRayGenerationRegion.size + _sharcUpdateMissRegion.size, handles.data() + 2 * handleSize, handleSize);
+	_allocator.flush(_sharcUpdateSbtBuffer);
+
+	_sharcUpdateRayGenerationRegion.deviceAddress = _sharcUpdateSbtBuffer.address;
+	_sharcUpdateMissRegion.deviceAddress = _sharcUpdateSbtBuffer.address + _sharcUpdateRayGenerationRegion.size;
+	_sharcUpdateHitRegion.deviceAddress = _sharcUpdateSbtBuffer.address + _sharcUpdateRayGenerationRegion.size + _sharcUpdateMissRegion.size;
+	_deletionQueue.push([this]() { _allocator.destroyBuffer(_sharcUpdateSbtBuffer); });
+}
+
 void Engine::createSharcBuffers() {
 	const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	_sharcHashEntries = _allocator.createBuffer(VkDeviceSize(SHARC_CAPACITY) * 8, usage, VMA_MEMORY_USAGE_GPU_ONLY, false);
 	_sharcAccumulation = _allocator.createBuffer(VkDeviceSize(SHARC_CAPACITY) * 16, usage, VMA_MEMORY_USAGE_GPU_ONLY, false);
 	_sharcResolved = _allocator.createBuffer(VkDeviceSize(SHARC_CAPACITY) * 16, usage, VMA_MEMORY_USAGE_GPU_ONLY, false);
+	_sharcLockBuffer = _allocator.createBuffer(VkDeviceSize(SHARC_CAPACITY) * sizeof(uint32_t), usage, VMA_MEMORY_USAGE_GPU_ONLY, false);
+	for (auto &frame : _frameResources) {
+		frame._sharcConfigBuffer = _allocator.createBuffer(sizeof(SharcConfig), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+	}
 
 	_deletionQueue.push([this]() {
 		_allocator.destroyBuffer(_sharcHashEntries);
 		_allocator.destroyBuffer(_sharcAccumulation);
 		_allocator.destroyBuffer(_sharcResolved);
+		_allocator.destroyBuffer(_sharcLockBuffer);
+		for (auto &frame : _frameResources) _allocator.destroyBuffer(frame._sharcConfigBuffer);
 		});
 
 	// Hash key 0 is an empty slot. Zeroed accumulation and resolved records match.
@@ -759,7 +883,45 @@ void Engine::createSharcBuffers() {
 		vkCmdFillBuffer(commandBuffer, _sharcHashEntries.buffer, 0, VK_WHOLE_SIZE, 0);
 		vkCmdFillBuffer(commandBuffer, _sharcAccumulation.buffer, 0, VK_WHOLE_SIZE, 0);
 		vkCmdFillBuffer(commandBuffer, _sharcResolved.buffer, 0, VK_WHOLE_SIZE, 0);
+		vkCmdFillBuffer(commandBuffer, _sharcLockBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
+
+		// Make the initial clears visible to the first update/resolve dispatches.
+		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+		VkDependencyInfo dependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		dependency.memoryBarrierCount = 1;
+		dependency.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(commandBuffer, &dependency);
 		});
+}
+
+void Engine::updateSharc(VkCommandBuffer commandBuffer) {
+	SharcConfig config{};
+	config.sceneScale = _sharcSceneScale;
+	auto &configBuffer = getCurrFrame()._sharcConfigBuffer;
+	memcpy(configBuffer.info.pMappedData, &config, sizeof(config));
+	_allocator.flush(configBuffer);
+
+	PushDataSharcUpdate push{};
+	push.pathtracer = _pcpt;
+	push.hashEntriesAddress = _sharcHashEntries.address;
+	push.accumulationAddress = _sharcAccumulation.address;
+	push.resolvedAddress = _sharcResolved.address;
+	push.configAddress = configBuffer.address;
+	push.lockAddress = _sharcLockBuffer.address;
+
+	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelineSharcUpdate);
+	VkPushDataInfoEXT pushData{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
+	pushData.data = { &push, sizeof(push) };
+	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushData);
+
+	// Sparse pathtracing dispatch
+	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_sharcUpdateRayGenerationRegion, &_sharcUpdateMissRegion, &_sharcUpdateHitRegion, &_sharcUpdateCallRegion,
+		(_renderExtent.width + SHARC_UPDATE_TILE_SIZE - 1) / SHARC_UPDATE_TILE_SIZE,
+		(_renderExtent.height + SHARC_UPDATE_TILE_SIZE - 1) / SHARC_UPDATE_TILE_SIZE, 1);
 }
 
 void Engine::initPipelineResolve() {
@@ -1054,9 +1216,8 @@ void Engine::draw() {
 	_pcpt.sceneData = _sceneDataBuffer.address;
 	_pcpt.totalFrames = _totalFrames;
 
-	// SHaRC order is update, resolve, then the render query. Update and query
-	// are not in this command buffer yet; resolve still has to run first so the
-	// resolved records are what the path tracer will read.
+	// SHaRC order is update, resolve, then the render query.
+	updateSharc(commandBuffer);
 	resolveSharc(commandBuffer);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelinePathtracer);
@@ -1208,6 +1369,7 @@ void Engine::init() {
 	createSharcBuffers();
 
 	initPipelinePathtracer();
+	initPipelineUpdate();
 	initPipelineResolve();
 	initPipelinePost();
 

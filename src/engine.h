@@ -21,6 +21,7 @@ struct FrameResources {
 
 	VkSemaphore _swapChainSemaphore{ VK_NULL_HANDLE }; //Wait to perform rendering operations on the GPU until the swap chain semaphore is signalled
 	VkFence _renderFence{ VK_NULL_HANDLE }; //Wait to record the command buffer until the fence is signalled
+	AllocatedBuffer _sharcConfigBuffer;
 };
 
 struct VkbData {
@@ -93,6 +94,7 @@ private:
 	VkCommandBuffer _immCommandBuffer;
 
 	VkPipeline _pipelinePathtracer;
+	VkPipeline _pipelineSharcUpdate;
 	VkPipeline _pipelineResolve;
 	VkPipeline _pipelinePost;
 
@@ -146,6 +148,11 @@ private:
 	VkStridedDeviceAddressRegionKHR _callRegion{};
 
 	AllocatedBuffer _sbtBuffer;
+	AllocatedBuffer _sharcUpdateSbtBuffer;
+	VkStridedDeviceAddressRegionKHR _sharcUpdateRayGenerationRegion{};
+	VkStridedDeviceAddressRegionKHR _sharcUpdateMissRegion{};
+	VkStridedDeviceAddressRegionKHR _sharcUpdateHitRegion{};
+	VkStridedDeviceAddressRegionKHR _sharcUpdateCallRegion{};
 
 	AllocatedImage _radianceImage;
 	VkImageViewCreateInfo _radianceImageViewCreateInfo;
@@ -181,6 +188,7 @@ private:
 	AllocatedBuffer _sharcHashEntries;
 	AllocatedBuffer _sharcAccumulation;
 	AllocatedBuffer _sharcResolved;
+	AllocatedBuffer _sharcLockBuffer; // One uint32_t per hash entry; 0 = unlocked.
 
 	glm::vec3 _sharcCameraPositionPrev{ 0.f };
 	bool _sharcCameraInitialized{ false };
@@ -227,10 +235,12 @@ private:
 	void loadScene(const std::string &file);
 
 	void initPipelinePathtracer();
+	void initPipelineUpdate();
 	void initPipelineResolve();
 	void initPipelinePost();
 
 	void createSharcBuffers();
+	void updateSharc(VkCommandBuffer commandBuffer);
 	void resolveSharc(VkCommandBuffer commandBuffer);
 
 	void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
