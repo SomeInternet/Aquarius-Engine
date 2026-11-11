@@ -47,14 +47,6 @@ set(SDL_INSTALL      OFF CACHE BOOL "" FORCE)
 set(SDL_UNINSTALL    OFF CACHE BOOL "" FORCE)
 # Vulkan surface creation is the whole reason SDL is here.
 set(SDL_VULKAN       ON  CACHE BOOL "" FORCE)
-# XTest is only used for synthetic input. SDL treats a missing libxtst as a
-# hard error, so turn that backend off when the header is not installed.
-if(UNIX AND NOT APPLE)
-    find_path(AQUARIUS_XTEST_INCLUDE X11/extensions/XTest.h)
-    if(NOT AQUARIUS_XTEST_INCLUDE)
-        set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)
-    endif()
-endif()
 add_subdirectory(SDL)
 
 # --- imgui ------------------------------------------------------------------

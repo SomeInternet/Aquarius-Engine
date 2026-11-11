@@ -123,12 +123,6 @@ struct HitPayload {
     float3 directLight = {}; //Light sampling contribution, not yet attenuated
 
     uint2 seed = 0;
-
-    // (review this) sharc adds
-    float3 hitNor = {}; // ws normal, facing incoming ray
-    float hitLen = 0.f; // length of curr segment
-    float roughness = 1.f; // rghness of surface
-
 };
 
 struct PointInfo {

@@ -93,7 +93,6 @@ private:
 	VkCommandBuffer _immCommandBuffer;
 
 	VkPipeline _pipelinePathtracer;
-	VkPipeline _pipelineResolve;
 	VkPipeline _pipelinePost;
 
 	VkbData _vkbData;
@@ -176,20 +175,7 @@ private:
 	VkImageViewCreateInfo _dlssOutputImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 
-	// SHaRC cache. Same entry count in every buffer; hash keys are 8 bytes and the
-	// other two records are 16. Cleared to zero, which is an empty hash slot.
-	AllocatedBuffer _sharcHashEntries;
-	AllocatedBuffer _sharcAccumulation;
-	AllocatedBuffer _sharcResolved;
-
-	glm::vec3 _sharcCameraPositionPrev{ 0.f };
-	bool _sharcCameraInitialized{ false };
-	VkSemaphore _sharcSemaphore{ VK_NULL_HANDLE };
-	bool _sharcSemaphoreWait{ false };
-
-	float _sharcSceneScale{ 50.f };
-	uint32_t _sharcAccumulationFrameNum{ 8 };
-	uint32_t _sharcStaleFrameNumMax{ 64 };
+	//TODO: Allocate images for ORCA/SHaRC here
 
 	//Deletion queue to handle object destruction
 	//TODO: VkGuide, from which I got this implementation, mentioned a better way to do it, so that's something I might want to look into
@@ -227,11 +213,7 @@ private:
 	void loadScene(const std::string &file);
 
 	void initPipelinePathtracer();
-	void initPipelineResolve();
 	void initPipelinePost();
-
-	void createSharcBuffers();
-	void resolveSharc(VkCommandBuffer commandBuffer);
 
 	void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 	void draw();
