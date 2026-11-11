@@ -1143,12 +1143,15 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 
 	int accumulationFrames = static_cast<int>(_sharcAccumulationFrameNum);
 	ImGui::SliderInt("SHaRC accumulation frames", &accumulationFrames, 1, 128);
+	if (static_cast<uint32_t>(accumulationFrames) != _sharcAccumulationFrameNum) _frameNum = 0;
 	_sharcAccumulationFrameNum = static_cast<uint32_t>(accumulationFrames);
 
 	int staleFrames = static_cast<int>(_sharcStaleFrameNumMax);
 	ImGui::SliderInt("SHaRC stale frames", &staleFrames, 8, 256);
+	if (static_cast<uint32_t>(staleFrames) != _sharcStaleFrameNumMax) _frameNum = 0;
 	_sharcStaleFrameNumMax = static_cast<uint32_t>(staleFrames);
 
+	if (ImGui::SliderFloat("SHaRC scene scale", &_sharcSceneScale, 1.f, 200.f)) _frameNum = 0;
 	ImGui::SliderFloat("SHaRC scene scale", &_sharcSceneScale, 1.f, 200.f);
 
 	float theta = _camera.getTheta();

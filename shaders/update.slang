@@ -3,6 +3,7 @@
 #define SHARC_QUERY 0
 
 #define HASH_GRID_COMPACT 0
+#define HASH_GRID_ENABLE_64_BIT_ATOMICS 0
 
 #include "bsdf.slang"
 #include "sharc_util.slang"
