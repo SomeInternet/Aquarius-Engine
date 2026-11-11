@@ -1,6 +1,6 @@
 // SHARC defs
 #ifndef SHARC_QUERY
-#define SHARC_QUERY 0 
+#define SHARC_QUERY 1
 #endif
 
 #ifndef SHARC_UPDATE
@@ -9,11 +9,24 @@
 
 //Holy shit, I think I love slang
 #include "bsdf.slang"
-
-// sharc shit
-#if SHARC_QUERY || SHARC_UPDATE
 #include "sharc.slang"
-#endif
+
+// SHARC 
+
+[vk::binding(5, 0)]
+RWStructuredBuffer<HashGridKey> sharcHashEntries;
+
+[vk::binding(6, 0)]
+RWStructuredBuffer<SharcAccumulationData> sharcAccumulation;
+
+[vk::binding(7, 0)]
+RWStructuredBuffer<SharcPackedData> sharcResolved;
+
+[vk::binding(8, 0)]
+StructuredBuffer<SharcConfig> sharcConfigBuffer;
+
+[vk::binding(9, 0)]
+RWStructuredBuffer<uint> sharcLockBuffer;
 
 //Inputs
 [vk::binding(0, 0)]
@@ -154,10 +167,11 @@ void rayGeneration() {
     float prevBsdfPdf = 0.f; // 0 when no light was sampled at the previous vertex (camera ray), so hitting a light gets the full weight
     
     float prevRoughness = 1.f;
-    #if SHARC_QUERY
-        SharcParameters params = createSharcParams(pc.camPos);
-    #endif
     
+    #if SHARC_QUERY
+        SharcParameters params = createSharcParams(pc.camPos, sharcConfigBuffer[0], sharcHashEntries, sharcAccumulation, sharcResolved, sharcLockBuffer);
+    #endif
+
     HitPayload payload = {};
     for (uint i = 0; i < pc.maxBounces; ++i) {
         payload.seed = seed;

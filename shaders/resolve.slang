@@ -9,7 +9,7 @@
 
 // SHaRC's buffers are RWStructuredBuffer fields of SharcParameters. Defaults
 // stay off for spherical harmonics, so each record is 16 bytes.
-#include "SharcCommon.h"
+#include "sharc.slang"
 
 struct PushConstantsResolve {
     float3 cameraPosition;
