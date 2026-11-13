@@ -1,6 +1,6 @@
 // SHARC defs
 #define SHARC_QUERY 1
-#define SHARC_UPDATE 0
+#define SHARC_UPDATE 1
 
 //Holy shit, I think I love slang
 #include "bsdf.slang"
