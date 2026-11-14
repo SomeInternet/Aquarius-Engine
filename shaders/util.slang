@@ -1,3 +1,4 @@
+#pragma once
 //Macros
 #define MAX_BOUNCES 10
 #define EPSILON 0.001f
@@ -7,6 +8,12 @@
 #define ENGINE_IMAGES 10
 #define MAX_SWAPCHAIN_SIZE 4
 #define HDR_IMAGES 1
+
+struct HashMap {
+    uint32_t *hashMapCheckSums;
+    uint32_t *hashMapCounts;
+    float3 *hashMapValues;
+};
 
 //Struct definitions
 struct Vertex {
@@ -102,6 +109,7 @@ struct PushConstantsPathtracer {
 
     RaytracingAccelerationStructure *tlas;
     SceneData *sceneData;
+    HashMap *hashMap;
 
     float fov;
     uint32_t totalFrames;
@@ -140,7 +148,18 @@ struct PointInfo {
     float2 uv = {};
 };
 
-//Helper functions
+// Helper functions
+half2 toOctahedral(float3 v) {
+    if (length(v) == 0.f) return half2(-2.h);
+
+    v /= (abs(v.x) + abs(v.y) + abs(v.z));
+    half2 sign = sign(v.xy);
+    if (sign.x == 0) sign.x = 1.h;
+    if (sign.y == 0) sign.y = 1.h;
+
+    return (v.z >= 0.f) ? half2(v.xy) : (1.h - abs(float2(v.yx))) * sign;
+}
+
 float3 fromOctahedral(half2 u) {
     if (u.x == -2.h && u.y == -2.h) return float3(0);
 

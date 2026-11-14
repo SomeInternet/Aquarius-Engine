@@ -17,6 +17,12 @@ struct SceneData {
 	float totalEnvWeight{ 0.f };
 };
 
+struct HashMap {
+	VkDeviceAddress hashMapCheckSums;
+	VkDeviceAddress hashMapCounts;
+	VkDeviceAddress hashMapValues;
+};
+
 struct PushConstantsPathtracer {
 	glm::vec3 camPos;
 	glm::vec3 camForward;
@@ -25,6 +31,7 @@ struct PushConstantsPathtracer {
 
 	VkDeviceAddress tlas;
 	VkDeviceAddress sceneData;
+	VkDeviceAddress hashMap;
 
 	float fov;
 	uint32_t totalFrames{ 0 };

@@ -1,4 +1,5 @@
 #include "util.slang"
+#pragma once
 
 inline float cos2Theta(float3 v) { return v.z * v.z; }
 

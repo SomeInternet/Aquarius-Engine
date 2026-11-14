@@ -45,6 +45,8 @@ constexpr int HEIGHT = 1080;
 constexpr int MAX_SWAPCHAIN_SIZE = 4;
 constexpr int FRAMES_IN_FLIGHT = 3;
 
+constexpr int NUM_HASH_MAP_ENTRIES = 250000;
+
 //DLSS images also serve as the g-buffer for ORCA
 //0: radiance image
 //1: diffuse-albedo (+metallic)
@@ -194,6 +196,12 @@ private:
 	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 
+	//GPU hash map
+	AllocatedBuffer _hashMapCheckSumBuffer{};
+	AllocatedBuffer _hashMapValuesBuffer{};
+	AllocatedBuffer _hashMapCountsBuffer{};
+	AllocatedBuffer _hashMapUniformBuffer{};
+
 	std::chrono::steady_clock::time_point _start;
 	// SHaRC cache. Same entry count in every buffer; hash keys are 8 bytes and the
 	// other two records are 16. Cleared to zero, which is an empty hash slot.
@@ -254,6 +262,8 @@ private:
 	void createSharcBuffers();
 	void updateSharc(VkCommandBuffer commandBuffer);
 	void resolveSharc(VkCommandBuffer commandBuffer);
+
+	void initGPUHashMap();
 
 	void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 	void draw();

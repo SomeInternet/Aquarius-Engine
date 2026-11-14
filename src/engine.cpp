@@ -781,7 +781,7 @@ void Engine::initPipelinePathtracer() {
 void Engine::initPipelineUpdate() {
 	//Initialize Vulkan raytracing objects
 
-	VkShaderModule moduleUpdate = util::loadShaderModule("./build/shaders/update.spv", _device);
+	VkShaderModule moduleUpdate = util::loadShaderModule("./build/shaders/slang.spv", _device);
 
 	VkDeviceSize imageStride = _imageHeapLayout.stride;
 
@@ -797,6 +797,9 @@ void Engine::initPipelineUpdate() {
 		pushAddressMapping(7, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
 		pushAddressMapping(8, 0, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, configAddress)),
 		pushAddressMapping(9, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
+		pushAddressMapping(0, 2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, _hashMap),
+		pushAddressMapping(1, 2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, _hashMap),
+		pushAddressMapping(2, 2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, _hashMapValuesBuffer),
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -1102,6 +1105,26 @@ void Engine::initPipelinePost() {
 	_deletionQueue.push([this]() {vkDestroyPipeline(_device, _pipelinePost, nullptr); });
 }
 
+void Engine::initGPUHashMap() {
+	_hashMapCheckSumBuffer = _allocator.createBuffer(NUM_HASH_MAP_ENTRIES * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, false);
+	_hashMapCountsBuffer = _allocator.createBuffer(NUM_HASH_MAP_ENTRIES * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, false);
+	_hashMapValuesBuffer = _allocator.createBuffer(NUM_HASH_MAP_ENTRIES * sizeof(glm::vec3), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, false);
+
+	_hashMapUniformBuffer = _allocator.createBuffer(sizeof(HashMap), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+	
+	HashMap hashMap{ _hashMapCheckSumBuffer.address, _hashMapCountsBuffer.address, _hashMapValuesBuffer.address };
+	memcpy(_hashMapUniformBuffer.info.pMappedData, &hashMap, sizeof(HashMap));
+	_allocator.flush(_hashMapUniformBuffer);
+
+	_deletionQueue.push([=]() {
+		_allocator.destroyBuffer(_hashMapCheckSumBuffer);
+		_allocator.destroyBuffer(_hashMapCountsBuffer);
+		_allocator.destroyBuffer(_hashMapValuesBuffer);
+
+		_allocator.destroyBuffer(_hashMapUniformBuffer);
+		});
+}
+
 void Engine::initImgui() {
 	ImGui::CreateContext();
 
@@ -1329,7 +1352,39 @@ void Engine::draw() {
 	VkPushDataInfoEXT pushDataPt{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
 	pushDataPt.offset = 0;
 	pushDataPt.data = { &pushPt, sizeof(pushPt)};
+
+	// Previous frame's trace may still be touching these shared buffers
+	VkMemoryBarrier2 preClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+	preClear.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+	preClear.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+	preClear.dstStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+	preClear.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+
+	VkDependencyInfo preDep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+	preDep.memoryBarrierCount = 1;
+	preDep.pMemoryBarriers = &preClear;
+
+	vkCmdPipelineBarrier2(commandBuffer, &preDep);
+
+	//Clear GPU Hash table (ORCA reset cache)
+	vkCmdFillBuffer(commandBuffer, _hashMapCheckSumBuffer.buffer, 0, VK_WHOLE_SIZE, ~0u);
+	vkCmdFillBuffer(commandBuffer, _hashMapCountsBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
+	vkCmdFillBuffer(commandBuffer, _hashMapValuesBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
+
+	//Post barrier
+	VkMemoryBarrier2 postClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+	postClear.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+	postClear.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+	postClear.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+	postClear.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+
+	VkDependencyInfo postDep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+	postDep.memoryBarrierCount = 1;
+	postDep.pMemoryBarriers = &postClear;
+
+	vkCmdPipelineBarrier2(commandBuffer, &postDep);
 	
+	//Sparse pass
 	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPt);
 	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_rayGenerationRegion, &_missRegion, &_hitRegion, &_callRegion, _renderExtent.width, _renderExtent.height, 1);
 
@@ -1515,6 +1570,7 @@ void Engine::init() {
 	loadScene(path);
 
 	createSharcBuffers();
+	initGPUHashMap();
 
 	initPipelinePathtracer();
 	initPipelineUpdate();

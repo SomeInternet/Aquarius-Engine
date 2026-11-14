@@ -6,69 +6,11 @@
 #define HASH_GRID_ENABLE_64_BIT_ATOMICS 0
 
 #include "bsdf.slang"
-#include "sharc_util.slang"
+#include "bindings.slang"
+#include "sampling.slang"
 
 // SHARC
-//  SHARC hash table
-[vk::binding(5, 0)]
-RWStructuredBuffer<HashGridKey> sharcHashEntries;
-
-// Per-frame radiance accumulation
-[vk::binding(6, 0)]
-RWStructuredBuffer<SharcAccumulationData> sharcAccumulation;
-
-// Temporally resolved cache
-[vk::binding(7, 0)]
-RWStructuredBuffer<SharcPackedData> sharcResolved;
-[vk::binding(8, 0)]
-StructuredBuffer<SharcConfig> sharcConfigBuffer;
-
-[vk::binding(9, 0)]
-RWStructuredBuffer<uint> sharcLockBuffer;
-
-//Inputs
-[vk::binding(0, 0)]
-RWTexture2D<float4> radianceImage;
-
-[vk::binding(1, 0)] //TODO: Change this if you change the max number of swap chain images
-Texture2D<float4> sceneImages[];
-
-[vk::binding(2, 0)]
-SamplerState samplers[];
-
-[vk::binding(3, 0)]
-RaytracingAccelerationStructure tlas;
-
-[vk::binding(4, 0)]
-Texture2D<float4> hdrImage;
-
-// G-buffer, DLSS and ORCA images: set 1, mirroring pathtracer.slang (unused by the update pass)
-[vk::binding(0, 1)]
-RWTexture2D<float4> diffuseAlbedoImage;
-
-[vk::binding(1, 1)]
-RWTexture2D<float4> specularAlbedoImage;
-
-[vk::binding(2, 1)]
-RWTexture2D<float4> normalRoughnessImage;
-
-[vk::binding(3, 1)]
-RWTexture2D<float4> depthImage;
-
-[vk::binding(4, 1)]
-RWTexture2D<float4> motionVectorImage;
-
-[vk::binding(5, 1)]
-RWTexture2D<float4> specHitDistImage;
-
-[vk::binding(6, 1)]
-RWTexture2D<float4> dlssOutputImage;
-
-[vk::binding(7, 1)]
-RWTexture2D<float4> orcaAlbedoImage;
-
-[[vk::push_constant]]
-PushConstantsPathtracer pc;
+// SHARC hash table
 
 struct UpdateHitPayload
 {
@@ -86,77 +28,6 @@ struct UpdateHitPayload
     float3 sharcLocalRadiance;
     uint sharcSurfaceValid;
 };
-
-inline float envLightPdf(SceneData *sceneData, float2 uv) {
-    if (sceneData->totalEnvWeight <= 0.f) return 0.f;
-
-    float sinTheta = sin(uv.y * PI);
-    if (sinTheta <= 0.f) return 0.f;
-
-    uint width, height;
-    hdrImage.GetDimensions(width, height);
-    int2 pixel = clamp(int2(uv * float2(width, height)), int2(0), int2(width - 1, height - 1));
-
-    float rowWeight = sin((float(pixel.y) + .5f) / float(height) * PI);
-    float weight = rowWeight * length(hdrImage.Load(int3(pixel, 0)).rgb);
-
-    return weight / (sceneData->totalEnvWeight + sceneData->totalLightWeight) * float(width * height) / (2.f * PI * PI * sinTheta);
-}
-
-inline LightSample sampleLight(SceneData *sceneData, float3 origin) {
-    LightSample ls = {};
-    float totalWeight = sceneData->totalEnvWeight + sceneData->totalLightWeight;
-    if (totalWeight <= 0.f) return ls;
-
-    if (rand() < sceneData->totalEnvWeight / totalWeight) { // Sample from environment map
-        uint width, height;
-        hdrImage.GetDimensions(width, height);
-        uint32_t pixel = sampleAliasTable(sceneData->envAliasTable, width * height, rand(), rand());
-
-        float2 uv = (float2(pixel % width, pixel / width) + float2(rand(), rand())) / float2(width, height);
-        float phi = (uv.x - .5f) * 2.f * PI;
-        float latitude = (.5f - uv.y) * PI;
-
-        ls.dir = float4(cos(latitude) * cos(phi), sin(latitude), cos(latitude) * sin(phi), INFINITY);
-        ls.radiance = hdrImage.SampleLevel(samplers[0], uv, 0.f).rgb;
-        ls.pr = envLightPdf(sceneData, uv);
-    } else {
-        uint32_t light = sampleAliasTable(sceneData->lightAliasTable, sceneData->nLights, rand(), rand());
-        float2 uv;
-        int matIdx;
-        float3 lightNor;
-        float3 p = sampleLightTriangle(sceneData->lightTriangles[light], float2(rand(), rand()), uv, matIdx, lightNor);
-
-        float3 toLight = p - origin;
-        float dist2 = dot(toLight, toLight);
-        float dist = sqrt(dist2);
-        ls.dir = float4(toLight / dist, dist);
-
-        Material mat = sceneData->materials[matIdx];
-        ls.radiance = mat.emission.rgb * mat.emission.w * ((mat.emissionImgIdx != -1) ?
-        sceneImages[NonUniformResourceIndex(mat.emissionImgIdx)]
-            .SampleLevel(samplers[NonUniformResourceIndex(mat.emissionSamplerIdx + 1)], uv, 0.f).rgb : float3(1.f));
-
-        ls.pr = triangleLightPdf(sceneData, mat, dist2, abs(dot(lightNor, ls.dir.xyz)));
-    }
-
-    return ls;
-}
-
-//Tests if the ray hit anything in the scene before it would reach whatever is tMax away in the direction
-//Having hit nothing means that we can see the light
-inline bool shadowRayCast(float3 origin, float3 dir, float tMax) {
-    RayDesc r;
-    r.Origin = origin;
-    r.Direction = dir;
-    r.TMin = EPSILON;
-    r.TMax = tMax;
-
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, r);
-    q.Proceed();
-    return q.CommittedStatus() == COMMITTED_NOTHING;
-}
 
 [shader("raygeneration")]
 void rayGeneration() {
