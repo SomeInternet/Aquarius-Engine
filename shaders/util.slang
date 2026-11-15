@@ -92,6 +92,8 @@ struct SceneData {
 enum EngineStateFlags : uint32_t {
     IBL = 1 << 0,
     RAY_RECONSTRUCTION = 1 << 1,
+    SHARC = 1 << 2,
+    SHARC_HEATMAP = 1 << 3,
 };
 
 struct PushConstantsPathtracer {
