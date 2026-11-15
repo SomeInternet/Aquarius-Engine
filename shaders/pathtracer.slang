@@ -63,7 +63,9 @@ void rayGeneration() {
             uint address;
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
             if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, payload.hitNor, hitPos,
-                MIN_LOD, cachedAlbedo) == HashMapResult::ENTRY_FOUND);
+                MIN_LOD, cachedAlbedo) != HashMapResult::ENTRY_FOUND) {
+                    cachedAlbedo = float3(1, 1, 0);
+                }
         }
 
         // SHARC QUERY/RENDER stage integration

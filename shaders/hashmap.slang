@@ -47,8 +47,8 @@ inline uint32_t quantizeDir(float3 dir) {
 
 inline uint64_t quantizePos(float3 pos, int lod) {
     // Potential overflow issues here
-    lod -= MIN_LOD;
-    uint16_t3 voxelPos = reinterpret<uint16_t3>(int16_t3(int3(floor(pos / (1 << ( 3 * lod)))) & 0xffff));
+    float lodFac = exp2(lod);
+    uint16_t3 voxelPos = reinterpret<uint16_t3>(int16_t3(int3(floor(pos / lodFac)) & 0xffff));
 
     return uint64_t(voxelPos[0]) << 32 | uint64_t(voxelPos[1]) << 16 | uint64_t(voxelPos[2]);
 }
