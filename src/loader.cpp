@@ -1,12 +1,14 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/transform.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 #include <filesystem>
 
 #include <tiny_gltf.h>
 #include <unordered_set>
 #include <unordered_map>
 #include <glm/gtc/type_ptr.hpp>
+#include <algorithm>
 
 #include "stb_image.h"
 
@@ -15,6 +17,65 @@
 #include "util.h"
 #include "init.h"
 #include "aliastable.h"
+
+//Helpers for reading from tinyglTF
+static float readComponent(const unsigned char *p, int componentType, bool normalized) {
+    switch (componentType) {
+    case TINYGLTF_COMPONENT_TYPE_FLOAT:
+        {
+            float x;
+            memcpy(&x, p, 4);
+            return x;
+        }
+    case TINYGLTF_COMPONENT_TYPE_BYTE:
+        {
+            int8_t x;
+            memcpy(&x, p, 1);
+            return normalized ? static_cast<float>(x) / 127.f : x;
+        }
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+    {
+        uint8_t x;
+        memcpy(&x, p, 1);
+        return normalized ? static_cast<float>(x) / 255.f : x;
+    }
+    case TINYGLTF_COMPONENT_TYPE_SHORT:
+        {
+            int16_t x;
+            memcpy(&x, p, 2);
+            return normalized ? static_cast<float>(x) / 32767.f : x;
+        }
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+        {
+            uint16_t x;
+            memcpy(&x, p, 2);
+            return normalized ? static_cast<float>(x) / 65535.f : x;
+        }
+    }
+    throw std::runtime_error("Unsupported component type!");
+}
+
+static std::vector<float> readAccessorFloats(const tinygltf::Model &model, int accessorIdx) {
+    const auto &accessor = model.accessors[accessorIdx];
+    const int nComp = tinygltf::GetNumComponentsInType(accessor.type);
+    const int compSize = tinygltf::GetComponentSizeInBytes(accessor.componentType);
+
+    std::vector<float> out(accessor.count * nComp, 0.f);
+    if (accessor.sparse.isSparse) std::cout << "Loader warning: sparse accessors not supported" << std::endl;
+    if (accessor.bufferView < 0) return out;
+
+    const auto &view = model.bufferViews[accessor.bufferView];
+    const auto &buffer = model.buffers[view.buffer];
+    const int stride = accessor.ByteStride(view);
+    if (stride < 0) throw std::runtime_error("Invalid accessor stride!");
+
+    const unsigned char *base = buffer.data.data() + view.byteOffset + accessor.byteOffset;
+    for (size_t i = 0; i < accessor.count; ++i)
+        for (int c = 0; c < nComp; ++c)
+            out[i * nComp + c] = readComponent(base + i * stride + c * compSize, accessor.componentType, accessor.normalized);
+
+    return out;
+}
 
 //Helper for octahedral projection
 static glm::uint32 octahedral(glm::vec3 v) {
@@ -55,40 +116,59 @@ static AccelerationStructure createAccelerationStructure(vkb::DispatchTable &dis
 
     buildInfo.dstAccelerationStructure = newAS.as;
     buildInfo.scratchData.deviceAddress = scratchBuffer.address;
+
+    //Keep copies for rebuilding later
+    newAS.buildInfo = buildInfo;
+    newAS.buildInfo.pGeometries = nullptr;
+    if (buildInfo.pGeometries && buildInfo.geometryCount == 1) {
+        newAS.geometry = *buildInfo.pGeometries;
+    }
+
     return newAS;
 }
 
 //Helper to parse the local transform matrix of a node in the scene graph
-static glm::mat4 parseLocalTransform(const tinygltf::Node &node) {
-    if (node.matrix.size() == 16) return glm::mat4(glm::make_mat4(node.matrix.data()));
+static glm::mat4 parseLocalTransform(const tinygltf::Node &node, glm::vec3 *t = nullptr, glm::quat *r = nullptr, glm::vec3 *s = nullptr) {
+    if (node.matrix.size() == 16) {
+        glm::vec3 skew;
+        glm::vec4 perspective;
+        if (t && r && s) glm::decompose(glm::mat4(glm::make_mat4(node.matrix.data())), *s, *r, *t, skew, perspective);
+        return glm::mat4(glm::make_mat4(node.matrix.data()));
+    } 
 
     //Transformations specified T-R-S
     glm::mat4 transform(1.f);
     if (node.translation.size() == 3) { //X, Y, Z displacement
         transform = glm::translate(transform, glm::vec3(node.translation[0], node.translation[1], node.translation[2]));
+        if (t) *t = glm::vec3(node.translation[0], node.translation[1], node.translation[2]);
     }
 
     if (node.rotation.size() == 4) { //Axis-angle rotation
         glm::quat rot = glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
         transform *= glm::toMat4(rot);
+        if (r) *r = glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
     }
 
     if (node.scale.size() == 3) { //X, Y, Z scale
         transform = glm::scale(transform, glm::vec3(node.scale[0], node.scale[1], node.scale[2]));
+        if (s) *s = glm::vec3(node.scale[0], node.scale[1], node.scale[2]);
     }
 
     return transform;
 }
 
-static void traverseSceneGraph(const tinygltf::Model &model, int nodeIdx, const glm::mat4 &parentMatrix, 
-    std::vector<Instance> &instances, std::unordered_map<int, LightMesh> &emissiveMeshes, std::vector<Instance> &emissiveInstances) {
+static void traverseSceneGraph(const tinygltf::Model &model, int nodeIdx, int parentIdx, const glm::mat4 &parentMatrix,
+    std::vector<Instance> &instances, std::unordered_map<int, LightMesh> &emissiveMeshes, std::vector<Instance> &emissiveInstances, std::vector<Node> &nodes, std::vector<int> &updateOrder) {
     const tinygltf::Node &node = model.nodes[nodeIdx];
-    glm::mat4 worldMatrix = parentMatrix * parseLocalTransform(node);
+    glm::mat4 worldMatrix = parentMatrix * parseLocalTransform(node, &nodes[nodeIdx].trans, &nodes[nodeIdx].rot, &nodes[nodeIdx].scale);
+    nodes[nodeIdx].parent = parentIdx;
+    updateOrder.push_back(nodeIdx);
 
     if (node.mesh >= 0) {
         Instance instance{};
         instance.transform = worldMatrix;
         instance.mesh = node.mesh;
+        instance.node = nodeIdx;
         instances.push_back(instance);
 
         if (emissiveMeshes.contains(node.mesh)) {
@@ -97,7 +177,7 @@ static void traverseSceneGraph(const tinygltf::Model &model, int nodeIdx, const 
     }
 
     //Recurse on children
-    for (int childIdx : node.children) traverseSceneGraph(model, childIdx, worldMatrix, instances, emissiveMeshes, emissiveInstances);
+    for (int childIdx : node.children) traverseSceneGraph(model, childIdx, nodeIdx, worldMatrix, instances, emissiveMeshes, emissiveInstances, nodes, updateOrder);
 }
 
 //Adapted from the Vulkan docs tutorial
@@ -442,7 +522,7 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
     std::vector<VkAccelerationStructureBuildGeometryInfoKHR> blasBuildInfos;
 
     std::vector<AllocatedBuffer> scratchBuffers;
-    scratchBuffers.reserve(newScene.meshes.size() + 1); //1 extra for the tlas
+    scratchBuffers.reserve(newScene.meshes.size());
 
     for (int i = 0; i < newScene.meshes.size(); ++i) {
         Mesh &mesh = newScene.meshes[i];
@@ -505,13 +585,16 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
     newScene.subMeshBuffer = allocator.uploadBuffer(subMeshTable.data(), subMeshTable.size() * sizeof(DeviceSubMesh), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VMA_MEMORY_USAGE_GPU_ONLY, false);
 
+    newScene.nodes.resize(model.nodes.size());
+    newScene.nodeTransforms.resize(model.nodes.size(), glm::mat4(1.f));
+    newScene.prevNodeTransforms.resize(model.nodes.size(), glm::mat4(1.f));
     //Traverse the scene graph to load instances
     std::vector<Instance> emissiveInstances;
     std::vector<Instance> instances;
     if (!model.scenes.empty()) {
         const tinygltf::Scene &modelScene = model.scenes[model.defaultScene >= 0 ? model.defaultScene : 0];
 
-        for (int root : modelScene.nodes) traverseSceneGraph(model, root, glm::mat4(1.f), instances, emissiveMeshes, emissiveInstances);
+        for (int root : modelScene.nodes) traverseSceneGraph(model, root, -1, glm::mat4(1.f), instances, emissiveMeshes, emissiveInstances, newScene.nodes, newScene.updateOrder);
     }
     else {
         //Push the meshes with default transforms
@@ -524,6 +607,49 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
         }
     }
 
+    //Load animations
+    newScene.animated = !(model.animations.empty());
+    //TODO: This loads all animations at once. Might want to consider a smarter way of going about it...
+    for (const auto &animation : model.animations) {
+        newScene.animations.emplace_back();
+        auto &anim = newScene.animations.back();
+
+        //Load samplers
+        for (const auto &sampler : animation.samplers) {
+            anim.animSamplers.emplace_back();
+            auto &samp = anim.animSamplers.back();
+
+            //Read in the times
+            samp.times = readAccessorFloats(model, sampler.input);
+            if (!samp.times.empty()) anim.duration = std::max(anim.duration, *std::max_element(samp.times.begin(), samp.times.end()));
+            
+            //Read in the keyframe values
+            const auto &outputAccessor = model.accessors[sampler.output];
+            int elts = tinygltf::GetNumComponentsInType(outputAccessor.type);
+            std::vector<float> rawData = readAccessorFloats(model, sampler.output);
+
+            samp.values.reserve(outputAccessor.count);
+            for (int i = 0; i < outputAccessor.count; ++i) {
+                samp.values.emplace_back(rawData[i * elts], rawData[i * elts + 1], rawData[i * elts + 2], (elts == 4) ? rawData[i * elts + 3] : 0.f);
+            }
+        }
+
+        ///Load channels
+        for (const auto &channel : animation.channels) {
+            anim.animChannels.emplace_back();
+            auto &chan = anim.animChannels.back();
+
+            chan.node = channel.target_node;
+            chan.sampler = channel.sampler;
+
+            if (channel.target_path == "translation") chan.type = AnimationType::TRANS;
+            else if (channel.target_path == "rotation") chan.type = AnimationType::ROT;
+            else if (channel.target_path == "scale") chan.type = AnimationType::SCALE;
+            else chan.type = AnimationType::UNSUPPORTED;
+        }
+    }
+
+    //Assumes static lights
     std::vector<LightTriangle> emissiveTriangles;
     std::vector<double> emissiveWeights;
     //Create a flat vector of emissive triangles
@@ -579,12 +705,14 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
 
     std::vector<VkAccelerationStructureInstanceKHR> vkInstances;
     vkInstances.reserve(instances.size());
+    newScene.instanceNodes.reserve(instances.size());
 
     //Convert our instances into instances for Vulkan to use
     for (auto &instance : instances) {
         if (newScene.meshes[instance.mesh].subMeshes.empty()) continue; //Don't create an instance of a mesh that doesn't have triangles
 
         VkAccelerationStructureInstanceKHR vkInstance{};
+        newScene.instanceNodes.push_back(instance.node);
 
         //Vulkan instances have a row-major transform matrix that is 3 by 4
         glm::mat4 transformRowMajor = glm::transpose(instance.transform);
@@ -599,8 +727,11 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
         vkInstances.push_back(vkInstance);
     }
 
-    newScene.instanceBuffer = allocator.uploadBuffer(vkInstances.data(), vkInstances.size() * sizeof(VkAccelerationStructureInstanceKHR), 
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, VMA_MEMORY_USAGE_GPU_ONLY, false);
+    newScene.instanceBuffers.clear();
+    for (int i = 0; i < FRAMES_IN_FLIGHT; ++i) {
+        newScene.instanceBuffers.push_back(allocator.uploadBuffer(vkInstances.data(), vkInstances.size() * sizeof(VkAccelerationStructureInstanceKHR),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, VMA_MEMORY_USAGE_CPU_TO_GPU, true));
+    }
 
     //TODO: Build the tlas for the scene
     VkAccelerationStructureGeometryKHR tlasGeometry{};
@@ -608,7 +739,7 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
     tlasGeometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
     tlasGeometry.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
     tlasGeometry.geometry.instances.arrayOfPointers = VK_FALSE;
-    tlasGeometry.geometry.instances.data.deviceAddress = newScene.instanceBuffer.address;
+    tlasGeometry.geometry.instances.data.deviceAddress = newScene.instanceBuffers[0].address;
 
     VkAccelerationStructureBuildGeometryInfoKHR tlasBuildInfo{};
     tlasBuildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -619,8 +750,7 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
     tlasBuildInfo.pGeometries = &tlasGeometry;
 
     uint32_t instanceCount = vkInstances.size();
-    scratchBuffers.push_back({});
-    newScene.tlas = createAccelerationStructure(dispatchTable, allocator, deviceProperties, tlasBuildInfo, &instanceCount, scratchBuffers.back());
+    newScene.tlas = createAccelerationStructure(dispatchTable, allocator, deviceProperties, tlasBuildInfo, &instanceCount, newScene.tlasScratchBuffer);
     
     VkAccelerationStructureBuildRangeInfoKHR tlasRange{};
     tlasRange.primitiveCount = instanceCount;
@@ -663,6 +793,80 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
     return newScene;
 }
 
+static void getInterpFacs(std::vector<float> &times, float time, int &i, int &j, float &x) {
+    if (time <= times.front()) {
+        i = 0;
+        j = 0;
+        x = 0.f;
+        return;
+    }
+    if (time >= times.back()) {
+        i = times.size() - 1;
+        j = times.size() - 1;
+        x = 0.f;
+        return;
+    }
+
+    //This is O(log(n)) lookup, it could be nice to make it faster in the future...
+    j = std::distance(times.begin(), std::upper_bound(times.begin(), times.end(), time)); //Just learned about lower_bound/upper_bound...yesterday? via a LeetCode.
+    i = j - 1;
+
+    x = (time - times[i]) / (times[j] - times[i]);
+}
+
+void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, vkb::DispatchTable &dispatchTable, float time, int frameIdx) {
+    //Interpolate animation values and send them to the nodes
+    for (auto &anim : scene.animations) {
+        //Wrap time
+        float t = anim.duration > 0.f ? std::fmod(time, anim.duration) : 0.f;
+
+        for (auto &chan : anim.animChannels) {
+            if (chan.type == AnimationType::UNSUPPORTED) continue;
+            if (chan.node < 0 || chan.node >= static_cast<int>(scene.nodes.size())) continue;
+            if (chan.sampler < 0 || chan.sampler >= static_cast<int>(anim.animSamplers.size())) continue;
+
+            AnimSampler &samp = anim.animSamplers[chan.sampler];
+            if (samp.times.empty() || samp.values.size() < samp.times.size()) continue;
+
+            int i, j;
+            float x;
+            getInterpFacs(samp.times, t, i, j, x);
+            const glm::vec4 &a = samp.values[i], &b = samp.values[j];
+            Node &node = scene.nodes[chan.node];
+
+            switch (chan.type) {
+            case AnimationType::TRANS: node.trans = glm::mix(glm::vec3(a), glm::vec3(b), x); break;
+            case AnimationType::SCALE: node.scale = glm::mix(glm::vec3(a), glm::vec3(b), x); break;
+            case AnimationType::ROT:
+                node.rot = glm::normalize(glm::slerp(glm::quat(a.w, a.x, a.y, a.z), glm::quat(b.w, b.x, b.y, b.z), x));
+                break;
+            default: break;
+            }
+        }
+    }
+
+    //Update node transformations
+    scene.prevNodeTransforms = scene.nodeTransforms;
+    scene.nodeTransforms.resize(scene.nodes.size(), glm::mat4(1.f));
+    for (int nodeIdx : scene.updateOrder) {
+        const Node &node = scene.nodes[nodeIdx];
+        glm::mat4 local = glm::translate(node.trans) * glm::toMat4(node.rot) * glm::scale(node.scale);
+
+        scene.nodeTransforms[nodeIdx] = (node.parent == -1) ? local : scene.nodeTransforms[node.parent] * local;
+    }
+
+    //Propagate changes to the instance buffer
+    auto *instanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(scene.instanceBuffers[frameIdx].info.pMappedData);
+    for (int i = 0; i < scene.instanceNodes.size(); ++i) {
+        if (scene.instanceNodes[i] < 0) continue;
+
+        //Vulkan instances have a row-major transform matrix that is 3 by 4
+        glm::mat4 transformRowMajor = glm::transpose(scene.nodeTransforms[scene.instanceNodes[i]]);
+        memcpy(&instanceBuffer[i].transform, glm::value_ptr(transformRowMajor), sizeof(VkTransformMatrixKHR));
+    }
+    allocator.flush(scene.instanceBuffers[frameIdx]);
+}
+
 void loader::destroyScene(VkDevice &device, Allocator &allocator, Scene &scene, vkb::DispatchTable &dispatchTable) {
     for (auto &mesh : scene.meshes) {
         for (auto &subMesh : mesh.subMeshes) {
@@ -679,6 +883,10 @@ void loader::destroyScene(VkDevice &device, Allocator &allocator, Scene &scene, 
 
         mesh.subMeshes.clear();
     }
+
+    for (auto &instanceBuffer : scene.instanceBuffers) allocator.destroyBuffer(instanceBuffer);
+    allocator.destroyBuffer(scene.tlasScratchBuffer);
+
     scene.meshes.clear();
 
     allocator.destroyBuffer(scene.materialBuffer);
@@ -687,7 +895,7 @@ void loader::destroyScene(VkDevice &device, Allocator &allocator, Scene &scene, 
     for (auto &image : scene.images) allocator.destroyImage(image);
     scene.images.clear();
 
-    allocator.destroyBuffer(scene.instanceBuffer);
+    //allocator.destroyBuffer(scene.instanceBuffer);
     allocator.destroyBuffer(scene.subMeshBuffer);
 
     allocator.destroyBuffer(scene.lightStrengthAliasTable);

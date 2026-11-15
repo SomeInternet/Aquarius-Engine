@@ -5,6 +5,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <VkBootstrap.h>
+#include <chrono>
 
 #include "imgui.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -44,16 +45,18 @@ constexpr int HEIGHT = 1080;
 constexpr int MAX_SWAPCHAIN_SIZE = 4;
 constexpr int FRAMES_IN_FLIGHT = 3;
 
+//DLSS images also serve as the g-buffer for ORCA
 //0: radiance image
-//1: diffuse albedo
-//2: specular albedo
+//1: diffuse-albedo (+metallic)
+//2: specular-albedo (+packed transmissiveness and IOR)
 //3: normal-roughness
 //4: view-depth
 //5: motion vectors
 //6: specular hit distance
 //7: dlss output
-//8: TODO: post
-constexpr int ENGINE_IMAGES = 9;
+//8: ORCA albedo
+//9: TODO: post
+constexpr int ENGINE_IMAGES = 10;
 constexpr int HDR_IMAGES = 1;
 constexpr int N_IMAGE_DESCRIPTORS = 4096;
 constexpr int N_SAMPLER_DESCRIPTORS = 256;
@@ -66,6 +69,10 @@ constexpr const char *PROJECT_VERSION = "0.1.0";
 
 struct NVSDK_NGX_Parameter;
 struct NVSDK_NGX_Handle;
+
+enum EngineDebugView : uint8_t {
+	PATHTRACED, DIFFUSE_ALBEDO, SPECULAR_ALBEDO, NORMALS, DEPTH, ORCA_ALBEDO
+};
 
 class Engine {
 private:
@@ -129,6 +136,8 @@ private:
 	ImGuiIO *_io{ nullptr };
 	Camera _camera{};
 
+	EngineDebugView _debugView{ EngineDebugView::PATHTRACED };
+
 	//Vulkan raytracing objects
 	Scene _scene{};
 
@@ -172,6 +181,7 @@ private:
 	AllocatedImage _motionVectorImage;
 	AllocatedImage _specHitDistImage;
 	AllocatedImage _dlssOutputImage;
+	AllocatedImage _orcaAlbedoImage;
 	AllocatedImage _postInputImage;
 
 	VkImageViewCreateInfo _diffuseAlbedoImageInfo{};
@@ -181,8 +191,18 @@ private:
 	VkImageViewCreateInfo _motionVectorImageInfo{};
 	VkImageViewCreateInfo _specHitDistImageInfo{};
 	VkImageViewCreateInfo _dlssOutputImageInfo{};
+	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 
+	//GPU hash maps
+	std::vector<HashMap> _hashMaps;
+
+	AllocatedBuffer _hashMapCheckSumBuffer{};
+	AllocatedBuffer _hashMapValuesBuffer{};
+	AllocatedBuffer _hashMapCountsBuffer{};
+	AllocatedBuffer _hashMapUniformBuffer{};
+
+	std::chrono::steady_clock::time_point _start;
 	// SHaRC cache. Same entry count in every buffer; hash keys are 8 bytes and the
 	// other two records are 16. Cleared to zero, which is an empty hash slot.
 	AllocatedBuffer _sharcHashEntries;
@@ -245,6 +265,8 @@ private:
 	void updateSharc(VkCommandBuffer commandBuffer);
 	void resolveSharc(VkCommandBuffer commandBuffer);
 
+	void initGPUHashMaps();
+
 	void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 	void draw();
 
@@ -256,7 +278,7 @@ private:
 	bool _minimized{ false };
 
 	//Helpers
-	inline FrameResources &getCurrFrame() { return _frameResources[_frameNum % FRAMES_IN_FLIGHT]; }
+	inline FrameResources &getCurrFrame() { return _frameResources[_totalFrames % FRAMES_IN_FLIGHT]; }
 
 public:
 	void init();

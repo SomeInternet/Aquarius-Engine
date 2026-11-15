@@ -1,138 +1,14 @@
 // SHARC defs
 #define SHARC_QUERY 1
-#define SHARC_UPDATE 0
+#define SHARC_UPDATE 1
 
 //Holy shit, I think I love slang
 #include "bsdf.slang"
-#include "sharc_util.slang"
 
+#include "sampling.slang"
+#include "bindings.slang"
+#include "hashmap.slang"
 // SHARC 
-
-[vk::binding(5, 0)]
-RWStructuredBuffer<HashGridKey> sharcHashEntries;
-
-[vk::binding(6, 0)]
-RWStructuredBuffer<SharcAccumulationData> sharcAccumulation;
-
-[vk::binding(7, 0)]
-RWStructuredBuffer<SharcPackedData> sharcResolved;
-
-[vk::binding(8, 0)]
-StructuredBuffer<SharcConfig> sharcConfigBuffer;
-
-[vk::binding(9, 0)]
-RWStructuredBuffer<uint> sharcLockBuffer;
-
-//Inputs
-[vk::binding(0, 0)]
-RWTexture2D<float4> radianceImage;
-
-[vk::binding(0, 1)]
-RWTexture2D<float4> diffuseAlbedoImage;
-
-[vk::binding(0, 2)]
-RWTexture2D<float4> specularAlbedoImage;
-
-[vk::binding(0, 3)]
-RWTexture2D<float4> normalRoughnessImage;
-
-[vk::binding(0, 4)]
-RWTexture2D<float4> depthImage;
-
-[vk::binding(0, 5)]
-RWTexture2D<float4> motionVectorImage;
-
-[vk::binding(0, 6)]
-RWTexture2D<float4> specHitDistImage;
-
-[vk::binding(0, 7)]
-RWTexture2D<float4> dlssOutputImage;
-
-[vk::binding(1, 0)] //TODO: Change this if you change the max number of swap chain images
-Texture2D<float4> sceneImages[];
-
-[vk::binding(2, 0)]
-SamplerState samplers[];
-
-[vk::binding(3, 0)]
-RaytracingAccelerationStructure tlas;
-
-[vk::binding(4, 0)]
-Texture2D<float4> hdrImage;
-
-[[vk::push_constant]]
-PushConstantsPathtracer pc;
-
-inline float envLightPdf(SceneData *sceneData, float2 uv) {
-    if (sceneData->totalEnvWeight <= 0.f) return 0.f;
-
-    float sinTheta = sin(uv.y * PI);
-    if (sinTheta <= 0.f) return 0.f;
-
-    uint width, height;
-    hdrImage.GetDimensions(width, height);
-    int2 pixel = clamp(int2(uv * float2(width, height)), int2(0), int2(width - 1, height - 1));
-
-    float rowWeight = sin((float(pixel.y) + .5f) / float(height) * PI);
-    float weight = rowWeight * length(hdrImage.Load(int3(pixel, 0)).rgb);
-
-    return weight / (sceneData->totalEnvWeight + sceneData->totalLightWeight) * float(width * height) / (2.f * PI * PI * sinTheta);
-}
-
-inline LightSample sampleLight(SceneData *sceneData, float3 origin) {
-    LightSample ls = {};
-    float totalWeight = sceneData->totalEnvWeight + sceneData->totalLightWeight;
-    if (totalWeight <= 0.f) return ls;
-
-    if (rand() < sceneData->totalEnvWeight / totalWeight) { // Sample from environment map
-        uint width, height;
-        hdrImage.GetDimensions(width, height);
-        uint32_t pixel = sampleAliasTable(sceneData->envAliasTable, width * height, rand(), rand());
-
-        float2 uv = (float2(pixel % width, pixel / width) + float2(rand(), rand())) / float2(width, height);
-        float phi = (uv.x - .5f) * 2.f * PI;
-        float latitude = (.5f - uv.y) * PI;
-
-        ls.dir = float4(cos(latitude) * cos(phi), sin(latitude), cos(latitude) * sin(phi), INFINITY);
-        ls.radiance = hdrImage.SampleLevel(samplers[0], uv, 0.f).rgb;
-        ls.pr = envLightPdf(sceneData, uv);
-    } else {
-        uint32_t light = sampleAliasTable(sceneData->lightAliasTable, sceneData->nLights, rand(), rand());
-        float2 uv;
-        int matIdx;
-        float3 lightNor;
-        float3 p = sampleLightTriangle(sceneData->lightTriangles[light], float2(rand(), rand()), uv, matIdx, lightNor);
-
-        float3 toLight = p - origin;
-        float dist2 = dot(toLight, toLight);
-        float dist = sqrt(dist2);
-        ls.dir = float4(toLight / dist, dist);
-
-        Material mat = sceneData->materials[matIdx];
-        ls.radiance = mat.emission.rgb * mat.emission.w * ((mat.emissionImgIdx != -1) ?
-        sceneImages[NonUniformResourceIndex(mat.emissionImgIdx)]
-            .SampleLevel(samplers[NonUniformResourceIndex(mat.emissionSamplerIdx + 1)], uv, 0.f).rgb : float3(1.f));
-
-        ls.pr = triangleLightPdf(sceneData, mat, dist2, abs(dot(lightNor, ls.dir.xyz)));
-    }
-
-    return ls;
-}
-
-//Tests if the ray hit anything in the scene before it would reach whatever is tMax away in the direction
-//Having hit nothing means that we can see the light
-inline bool shadowRayCast(float3 origin, float3 dir, float tMax) {
-    RayDesc r;
-    r.Origin = origin;
-    r.Direction = dir;
-    r.TMin = EPSILON;
-    r.TMax = tMax;
-
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE> q;
-    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, r);
-    q.Proceed();
-    return q.CommittedStatus() == COMMITTED_NOTHING;
-}
 
 [shader("raygeneration")]
 void rayGeneration() {
@@ -169,6 +45,8 @@ void rayGeneration() {
     #endif
 
     HitPayload payload = {};
+    float3 cachedAlbedo = float3(0.f);
+    bool hashMapQueried = false;
     for (uint i = 0; i < pc.maxBounces; ++i) {
         depth = i;
         payload.seed = seed;
@@ -178,6 +56,16 @@ void rayGeneration() {
         ReorderThread(hitObject);
         HitObject::Invoke<HitPayload>(tlas, hitObject, payload);
         seed = payload.seed;
+
+        // Temp, visualize second-hit samples from hashmap queries
+        if (!hashMapQueried && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
+            hashMapQueried = true;
+            uint address;
+            float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
+            if (query(pc.hashMap->checkSumBuffer, 250000, payload.hitNor, hitPos,
+                0, address) == HashMapResult::ENTRY_FOUND)
+                cachedAlbedo = pc.hashMap->radianceBuffer[address];
+        }
 
         // SHARC QUERY/RENDER stage integration
         // we not considering the first (direct) bounce, if cache hit we use cache and terminate
@@ -243,6 +131,7 @@ void rayGeneration() {
                                         : float3(1.f, 0.f, 0.f);
     }
 
+    /*
     if (pc.flags & EngineStateFlags::RAY_RECONSTRUCTION) {
         radianceImage[DispatchRaysIndex().xy] = radianceImage[DispatchRaysIndex().xy] * float(pc.frameNum) / float(pc.frameNum + 1) +
             float4(accumulatedLight, 1.f) * 1.f / float(pc.frameNum + 1);
@@ -250,6 +139,10 @@ void rayGeneration() {
         radianceImage[DispatchRaysIndex().xy] = radianceImage[DispatchRaysIndex().xy] * float(pc.frameNum) / float(pc.frameNum + 1) +
             float4(accumulatedLight, 1.f) * 1.f / float(pc.frameNum + 1);
     }
+    */
+
+    //only output albedo stored by hash for testing
+    radianceImage[DispatchRaysIndex().xy] = float4(cachedAlbedo, 1.f);
 }
 
 [shader("closesthit")]
@@ -271,6 +164,9 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
             pointInfo.tan *= -1.f;
         }
     }
+
+    payload.hitLen = RayTCurrent();
+    payload.hitNor = normalize(mul(gNor, WorldToObject3x4()).xyz);
 
     // TODO: Consider an alternative to my current solution to a material index being 0
     // TODO: Drop the image and sampler indices once I'm done with them?
@@ -348,7 +244,9 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
     payload.hitNor = normalize(mul(gNor, WorldToObject3x4()).xyz);
     payload.roughness = pbr.metallicRoughness.y;
 
-    //Light sampling, weighted against the chance of the BSDF sampling the same direction
+    // Light sampling, weighted against the chance of the BSDF sampling the same direction
+    float3 gAlbedo;
+    float3 gSpecular;
     {
         LightSample ls = sampleLight(pc.sceneData, hitPos);
         float3 wiLight = normalize(mulNor(pointInfo, mul(WorldToObject3x4(), float4(ls.dir.xyz, 0.f)).xyz));
@@ -356,13 +254,26 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
         if (ls.pr > 0.f && wiLight.z != 0.f) {
             float3 bsdf;
             float bsdfPdf;
-            evalCookTorrance(wo, wiLight, pbr, bsdf, bsdfPdf);
+            evalCookTorrance2(wo, wiLight, pbr, bsdf, gAlbedo, gSpecular, bsdfPdf);
 
             //The bsdf already includes the cosine term
             if (any(bsdf > 0.f) && shadowRayCast(hitPos + worldNor * sign(wiLight.z) * EPSILON, ls.dir.xyz, ls.dir.w - 2.f * EPSILON)) {
                 payload.directLight = bsdf * ls.radiance * powerHeuristic(1, ls.pr, 1, bsdfPdf) / ls.pr;
             }
         }
+    }
+
+    //Write out information to the shared DLSS/ORCA GBuffer images
+    if (!payload.gBufferWritten) {
+        payload.gBufferWritten = true;
+        diffuseAlbedoImage[DispatchRaysIndex().xy] = float4(gAlbedo, pbr.metallicRoughness.x);
+        specularAlbedoImage[DispatchRaysIndex().xy] = float4(gSpecular, 1.f);
+        normalRoughnessImage[DispatchRaysIndex().xy] = float4(worldNor, pbr.metallicRoughness.y);
+        depthImage[DispatchRaysIndex().xy] = RayTCurrent();
+        // TODO: Specular hit dist image via raycast...?
+        // TODO: Motion vectors
+        orcaAlbedoImage[DispatchRaysIndex().xy] = pbr.color;
+
     }
 
     float3 wi;
@@ -393,6 +304,15 @@ void miss(inout HitPayload payload) {
     payload.throughput = hdrImage.SampleLevel(samplers[0], uv, 0.f).rgb;
     payload.pdf = envLightPdf(pc.sceneData, uv);
     payload.throughput.b = min(-payload.throughput.b, -EPSILON);
+
+    if (!payload.gBufferWritten) {
+        payload.gBufferWritten = true;
+        diffuseAlbedoImage[DispatchRaysIndex().xy] = float4(0.f);
+        specularAlbedoImage[DispatchRaysIndex().xy] = float4(0.f);
+        normalRoughnessImage[DispatchRaysIndex().xy] = float4(0.f);
+        orcaAlbedoImage[DispatchRaysIndex().xy] = float4(float3(0.f), 1.f);
+        depthImage[DispatchRaysIndex().xy] = INFINITY;
+    }
 }
 
 [shader("anyhit")]

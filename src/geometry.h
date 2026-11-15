@@ -59,6 +59,9 @@ struct AccelerationStructure {
 	VkAccelerationStructureKHR as{};
 	AllocatedBuffer buffer;
 
+	VkAccelerationStructureGeometryKHR geometry{};
+	VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
+
 	VkDeviceAddress address; //For instancing
 };
 
@@ -69,8 +72,38 @@ struct Mesh {
 };
 
 struct Instance {
-	glm::mat4 transform;
+	glm::mat4 transform{ 1.f };
 	uint32_t mesh;
+	int node{ -1 };
+};
+
+enum AnimationType {
+	TRANS, ROT, SCALE, UNSUPPORTED
+};
+
+struct AnimSampler {
+	std::vector<float> times;
+	std::vector<glm::vec4> values;
+	//TODO: Add different interpolation types
+};
+
+struct AnimChannel {
+	int node;
+	AnimationType type;
+	int sampler;
+};
+
+struct Animation {
+	std::vector<AnimChannel> animChannels;
+	std::vector<AnimSampler> animSamplers;
+	float duration{ 0.f };
+};
+
+struct Node {
+	glm::vec3 trans{ 0.f };
+	glm::quat rot{ 1.f, 0.f, 0.f, 0.f };
+	glm::vec3 scale{ 1.f };
+	int parent{ -1 };
 };
 
 struct Scene {
@@ -86,8 +119,16 @@ struct Scene {
 	std::vector<VkImageViewCreateInfo> imageViewCreateInfos; //Descriptor heaps allocate image views from the create infos
 
 	std::vector<AllocatedImage> images;
+	std::vector<int> instanceNodes; //Tracks which nodes control which instances
+	std::vector<AllocatedBuffer> instanceBuffers;
 
-	AllocatedBuffer instanceBuffer;
+	AllocatedBuffer tlasScratchBuffer;
+	
+	std::vector<Node> nodes;
+	std::vector<int> updateOrder;
+	std::vector<glm::mat4> prevNodeTransforms;
+	std::vector<glm::mat4> nodeTransforms;
+	std::vector<Animation> animations;
 
 	AccelerationStructure tlas{};
 
@@ -95,6 +136,8 @@ struct Scene {
 	AllocatedBuffer lightStrengthAliasTable;
 	uint32_t nLights{ 0 };
 	float totalLightWeight{ 0.f };
+
+	bool animated{ false };
 };
 
 struct LightSubMesh {

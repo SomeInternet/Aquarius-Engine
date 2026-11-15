@@ -32,11 +32,11 @@ static_assert(offsetof(PushConstantsResolve, capacity) == 64);
 static_assert(offsetof(PushConstantsResolve, frameIndex) == 80);
 
 //Helpers to, uh, help us set up the descriptors for the shaders
-static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, VkSpirvResourceTypeFlagsEXT mask, 
+static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, uint32_t set, VkSpirvResourceTypeFlagsEXT mask, 
 	VkDeviceSize heapOffset, VkDeviceSize heapArrayStride) {
 
 	VkDescriptorSetAndBindingMappingEXT mapping{ .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT };
-	mapping.descriptorSet = 0;
+	mapping.descriptorSet = set;
 	mapping.firstBinding = binding;
 	mapping.bindingCount = 1;
 	mapping.resourceMask = mask;
@@ -46,14 +46,14 @@ static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, VkSpirv
 	return mapping;
 }
 
-static VkDescriptorSetAndBindingMappingEXT pushAddressMapping(uint32_t binding, VkSpirvResourceTypeFlagsEXT mask, uint32_t pushOffset) {
+static VkDescriptorSetAndBindingMappingEXT pushAddressMapping(uint32_t binding, uint32_t set, VkSpirvResourceTypeFlagsEXT mask, uint32_t pushOffset) {
 	VkDescriptorSetAndBindingMappingEXT mapping{ .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT };
-	mapping.descriptorSet = 0;
+	mapping.descriptorSet = set;
 	mapping.firstBinding = binding;
 	mapping.bindingCount = 1; 
 	mapping.resourceMask = mask;
-	mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_ADDRESS_EXT;
-	mapping.sourceData.pushAddressOffset = pushOffset;
+	mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_ADDRESS_EXT; //Address sourced from a push constant
+	mapping.sourceData.pushAddressOffset = pushOffset; //Within the push constant, address found at this offset
 	return mapping;
 }
 
@@ -362,14 +362,26 @@ void Engine::initRadianceImageDescriptors() {
 void Engine::createDLSSImages() {
 	VkExtent3D extent = VkExtent3D(_renderExtent.width, _renderExtent.height, 1);
 	
-	_diffuseAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_diffuseAlbedoImageInfo);
-	_specularAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_specularAlbedoImageInfo);
-	_normalRoughnessImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_normalRoughnessImageInfo);
-	_viewDepthImage = _allocator.createImage(extent, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_viewDepthImageInfo);
+	//TRANSFER_SRC so the debug view can blit these directly into the swap chain
+	constexpr VkImageUsageFlags debugViewUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+	_diffuseAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_diffuseAlbedoImageInfo);
+	_specularAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_specularAlbedoImageInfo);
+	_normalRoughnessImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, debugViewUsage, false, &_normalRoughnessImageInfo);
+	_viewDepthImage = _allocator.createImage(extent, VK_FORMAT_R32_SFLOAT, debugViewUsage, false, &_viewDepthImageInfo);
 	_motionVectorImage = _allocator.createImage(extent, VK_FORMAT_R32G32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_motionVectorImageInfo);
 	_specHitDistImage = _allocator.createImage(extent, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_specHitDistImageInfo);
 	_dlssOutputImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_dlssOutputImageInfo);
+	_orcaAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_orcaAlbedoImageInfo);
 	//TODO: Create additional images for DLSS (might want too look into the depth of field guide)
+
+	//The shaders write these as storage images, so keep them in GENERAL
+	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
+		for (VkImage image : { _diffuseAlbedoImage.image, _specularAlbedoImage.image, _normalRoughnessImage.image, _viewDepthImage.image,
+			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image }) {
+			util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+		}
+		});
 }
 
 void Engine::destroyDLSSImages() {
@@ -380,6 +392,7 @@ void Engine::destroyDLSSImages() {
 	_allocator.destroyImage(_motionVectorImage);
 	_allocator.destroyImage(_specHitDistImage);
 	_allocator.destroyImage(_dlssOutputImage);
+	_allocator.destroyImage(_orcaAlbedoImage);
 	//_allocator.destroyImage(_postInputImage);
 }
 
@@ -391,6 +404,7 @@ void Engine::initDLSSImageDescriptors() {
 	writeImageDescriptor(5, _motionVectorImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(6, _specHitDistImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(7, _dlssOutputImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+	writeImageDescriptor(8, _orcaAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	_allocator.flush(_imageHeap);
 }
 
@@ -469,10 +483,12 @@ void Engine::updateRenderExtent() {
 	uint32_t optWidth, optHeight, minWidth, minHeight, maxWidth, maxHeight = 0;
 	float sharpness = 0.f;
 
-	NGX_DLSS_GET_OPTIMAL_SETTINGS(_ngxParams, _vkbData.swapChain.extent.width, _vkbData.swapChain.extent.height, NVSDK_NGX_PerfQuality_Value_MaxPerf,
+	NGX_DLSS_GET_OPTIMAL_SETTINGS(_ngxParams, _vkbData.swapChain.extent.width, _vkbData.swapChain.extent.height, NVSDK_NGX_PerfQuality_Value_MaxQuality,
 		&optWidth, &optHeight, &maxWidth, &maxHeight, &minWidth, &minHeight, &sharpness);
-	_renderExtent.width = optWidth;
-	_renderExtent.height = optHeight;
+	//_renderExtent.width = optWidth;
+	//_renderExtent.height = optHeight;
+	_renderExtent.width = _vkbData.swapChain.extent.width;
+	_renderExtent.height = _vkbData.swapChain.extent.height;
 #else
 	_renderExtent = _swapChainExtent;
 #endif
@@ -648,16 +664,26 @@ void Engine::initPipelinePathtracer() {
 
 	//Create the bindings for the resources
 	std::array mappings = {
-		heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
-		heapMapping(1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
-		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
-		pushAddressMapping(3, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushConstantsPathtracer, tlas)), //Tlas
-		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
-		pushAddressMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, hashEntriesAddress)),
-		pushAddressMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, accumulationAddress)),
-		pushAddressMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
-		pushAddressMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT,  offsetof(PushDataSharc, configAddress)),
-		pushAddressMapping(9, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
+		//Set 0 is for SHaRC
+		heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
+		heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
+		heapMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
+		pushAddressMapping(3, 0, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
+		heapMapping(4, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
+		pushAddressMapping(5, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, hashEntriesAddress)),
+		pushAddressMapping(6, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, accumulationAddress)),
+		pushAddressMapping(7, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
+		pushAddressMapping(8, 0, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, configAddress)),
+		pushAddressMapping(9, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
+		//Set 1 is for the DLSS/ORCA images
+		heapMapping(0, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 1 * imageStride, 0), //Diffuse albedo
+		heapMapping(1, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 2 * imageStride, 0), //Specular albedo
+		heapMapping(2, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 3 * imageStride, 0), //Normal/roughness
+		heapMapping(3, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 4 * imageStride, 0), //Depth
+		heapMapping(4, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 5 * imageStride, 0), //Motion vectors
+		heapMapping(5, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 6 * imageStride, 0), //Specular hit distance
+		heapMapping(6, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 7 * imageStride, 0), //DLSS output
+		heapMapping(7, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 8 * imageStride, 0), //ORCA albedo
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -755,22 +781,25 @@ void Engine::initPipelinePathtracer() {
 void Engine::initPipelineUpdate() {
 	//Initialize Vulkan raytracing objects
 
-	VkShaderModule moduleUpdate = util::loadShaderModule("./build/shaders/update.spv", _device);
+	VkShaderModule moduleUpdate = util::loadShaderModule("./build/shaders/slang.spv", _device);
 
 	VkDeviceSize imageStride = _imageHeapLayout.stride;
 
 	//Create the bindings for the resources
 	std::array mappings = {
-		heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
-		heapMapping(1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
-		heapMapping(2, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
-		pushAddressMapping(3, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
-		heapMapping(4, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
-		pushAddressMapping(5, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, hashEntriesAddress)),
-		pushAddressMapping(6, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, accumulationAddress)),
-		pushAddressMapping(7, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
-		pushAddressMapping(8, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, configAddress)),
-		pushAddressMapping(9, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
+		heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
+		heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
+		heapMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
+		pushAddressMapping(3, 0, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
+		heapMapping(4, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride), //Hdr image
+		pushAddressMapping(5, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, hashEntriesAddress)),
+		pushAddressMapping(6, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, accumulationAddress)),
+		pushAddressMapping(7, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
+		pushAddressMapping(8, 0, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, configAddress)),
+		pushAddressMapping(9, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
+		pushAddressMapping(0, 2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, _hashMap),
+		pushAddressMapping(1, 2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, _hashMap),
+		pushAddressMapping(2, 2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, _hashMapValuesBuffer),
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -929,9 +958,9 @@ void Engine::initPipelineResolve() {
 	VkShaderModule moduleResolve = util::loadShaderModule("./build/shaders/resolve.spv", _device);
 
 	std::array mappings = {
-		pushAddressMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, hashEntriesAddress)),
-		pushAddressMapping(1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, accumulationAddress)),
-		pushAddressMapping(2, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, resolvedAddress))
+		pushAddressMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, hashEntriesAddress)),
+		pushAddressMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, accumulationAddress)),
+		pushAddressMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushConstantsResolve, resolvedAddress))
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -1043,8 +1072,8 @@ void Engine::initPipelinePost() {
 	VkDeviceSize imageStride = _imageHeapLayout.stride;
 
 	std::array mappings = {
-	heapMapping(0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0),
-	heapMapping(1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, ENGINE_IMAGES * imageStride, imageStride)
+	heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0),
+	heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, ENGINE_IMAGES * imageStride, imageStride)
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -1070,6 +1099,23 @@ void Engine::initPipelinePost() {
 	vkDestroyShaderModule(_device, modulePost, nullptr);
 
 	_deletionQueue.push([this]() {vkDestroyPipeline(_device, _pipelinePost, nullptr); });
+}
+
+void Engine::initGPUHashMaps() {
+	_deletionQueue.push([=]() {
+		_allocator.destroyBuffer(_hashMapCheckSumBuffer);
+		_allocator.destroyBuffer(_hashMapCountsBuffer);
+		_allocator.destroyBuffer(_hashMapValuesBuffer);
+
+		_allocator.destroyBuffer(_hashMapUniformBuffer);
+		});
+
+	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i) _hashMaps.emplace_back(_allocator);
+
+	_deletionQueue.push([=]() {
+		for (auto &hashMap : _hashMaps) hashMap.destroy(_allocator);
+		_hashMaps.clear();
+	});
 }
 
 void Engine::initImgui() {
@@ -1121,6 +1167,21 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	ImGui::Begin("Aquarius Engine Analytics", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
 	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+
+	//Debug view to make sure the DLSS/GBuffer images are appearing properly
+	std::vector<const char *> debugViewOptions = {"Pathtraced", "Diffuse Albedo", "Specular Albedo", "Normals", "Depth", "ORCA Albedo"};
+	const char *selected = debugViewOptions[static_cast<int>(_debugView)];
+
+	if (ImGui::BeginCombo("Debug view", selected)) {
+		for (uint8_t i = 0; i < debugViewOptions.size(); ++i) {
+			bool isSelected = selected == debugViewOptions[i];
+			if (ImGui::Selectable(debugViewOptions[i], isSelected)) selected = debugViewOptions[i];
+
+			isSelected = selected == debugViewOptions[i];
+			if (isSelected) _debugView = static_cast<EngineDebugView>(i);
+		}
+		ImGui::EndCombo();
+	}
 
 	int maxBounces = _pcpt.maxBounces;
 	ImGui::SliderInt("Max bounces", &maxBounces, 1, 20);
@@ -1215,6 +1276,54 @@ void Engine::draw() {
 
 	//Call the pathtracer
 	if (_camera.wasDirty()) _frameNum = 0; //Reset the frame if the camera's view or rotation changed
+
+	if (_scene.animated) {
+		_frameNum = 0;
+
+		auto now = std::chrono::steady_clock::now();
+		auto time = std::chrono::duration<float>(now - _start).count();
+
+		int frameIdx = _totalFrames % FRAMES_IN_FLIGHT;
+
+		loader::updateScene(_device, _allocator, _scene, _dispatchTable, time, frameIdx);
+
+		//Rebuild the TLAS
+		VkAccelerationStructureGeometryKHR tlasGeometry = _scene.tlas.geometry;
+		tlasGeometry.geometry.instances.data.deviceAddress = _scene.instanceBuffers[frameIdx].address;
+
+		VkAccelerationStructureBuildGeometryInfoKHR tlasBuildInfo = _scene.tlas.buildInfo;
+		tlasBuildInfo.pGeometries = &tlasGeometry;
+
+		uint32_t instanceCount = _scene.instanceNodes.size();
+
+		VkAccelerationStructureBuildRangeInfoKHR tlasRange{};
+		tlasRange.primitiveCount = instanceCount;
+
+		//The TLAS and its scratch buffer are shared by every frame in flight
+		VkMemoryBarrier2 preBuildBarrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		preBuildBarrier.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		preBuildBarrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+		preBuildBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		preBuildBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+		VkDependencyInfo preBuildDependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		preBuildDependency.memoryBarrierCount = 1;
+		preBuildDependency.pMemoryBarriers = &preBuildBarrier;
+		vkCmdPipelineBarrier2(commandBuffer, &preBuildDependency);
+
+		const VkAccelerationStructureBuildRangeInfoKHR *pTlasRange = &tlasRange;
+		_dispatchTable.cmdBuildAccelerationStructuresKHR(commandBuffer, 1, &tlasBuildInfo, &pTlasRange);
+
+		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+		barrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+		barrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+		VkDependencyInfo dependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		dependency.memoryBarrierCount = 1;
+		dependency.pMemoryBarriers = &barrier;
+
+		vkCmdPipelineBarrier2(commandBuffer, &dependency);
+	}
 		
 	_camera.toPushConstantsPathtracer(_pcpt);
 	_pcpt.frameNum = _frameNum;
@@ -1252,39 +1361,115 @@ void Engine::draw() {
 	VkPushDataInfoEXT pushDataPt{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
 	pushDataPt.offset = 0;
 	pushDataPt.data = { &pushPt, sizeof(pushPt)};
+
+	// Previous frame's trace may still be touching these shared buffers
+	VkMemoryBarrier2 preClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+	preClear.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+	preClear.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+	preClear.dstStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+	preClear.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+
+	VkDependencyInfo preDep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+	preDep.memoryBarrierCount = 1;
+	preDep.pMemoryBarriers = &preClear;
+
+	vkCmdPipelineBarrier2(commandBuffer, &preDep);
+
+	//Clear GPU Hash table (ORCA reset cache)
+	vkCmdFillBuffer(commandBuffer, _hashMapCheckSumBuffer.buffer, 0, VK_WHOLE_SIZE, ~0u);
+	vkCmdFillBuffer(commandBuffer, _hashMapCountsBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
+	vkCmdFillBuffer(commandBuffer, _hashMapValuesBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
+
+	//Post barrier
+	VkMemoryBarrier2 postClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+	postClear.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+	postClear.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+	postClear.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+	postClear.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+
+	VkDependencyInfo postDep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+	postDep.memoryBarrierCount = 1;
+	postDep.pMemoryBarriers = &postClear;
+
+	vkCmdPipelineBarrier2(commandBuffer, &postDep);
 	
+	//Sparse pass
 	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPt);
 	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_rayGenerationRegion, &_missRegion, &_hitRegion, &_callRegion, _renderExtent.width, _renderExtent.height, 1);
 
-	//Transition the swap chain image layout for writing from the post process compute
-	util::transitionImageLayout(commandBuffer, _swapChainImages[swapChainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+	VkImage swapChainImage = _swapChainImages[swapChainImageIndex];
+	VkImageLayout swapChainLayout;
 
-	//Call the post process
-	PushConstantsPost pcp{};
-	pcp.outputImageIdx = swapChainImageIndex;
-	// Storage writes map shader component 0 onto the format's first channel.
-	// For B8G8R8A8 that channel is blue, so the post shader swaps R and B.
-	pcp.swapRedBlue = _swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM ? 1u : 0u;
-	
-	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
-	VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
-	pushDataPost.offset = 0;
-	pushDataPost.data = { &pcp, sizeof(PushConstantsPost) };
-	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPost);
-	vkCmdDispatch(commandBuffer, (_swapChainExtent.width + 15) / 16, (_swapChainExtent.height + 15) / 16, 1);
+	if (_debugView == EngineDebugView::PATHTRACED) {
+		//Transition the swap chain image layout for writing from the post process compute
+		util::transitionImageLayout(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+		swapChainLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+		//Call the post process
+		PushConstantsPost pcp{};
+		pcp.outputImageIdx = swapChainImageIndex;
+		// Storage writes map shader component 0 onto the format's first channel.
+		// For B8G8R8A8 that channel is blue, so the post shader swaps R and B.
+		pcp.swapRedBlue = _swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM ? 1 : 0;
+
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
+		VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
+		pushDataPost.offset = 0;
+		pushDataPost.data = { &pcp, sizeof(PushConstantsPost) };
+		_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPost);
+		vkCmdDispatch(commandBuffer, (_swapChainExtent.width + 15) / 16, (_swapChainExtent.height + 15) / 16, 1);
+	}
+	else {
+		//Blit the selected g-buffer image straight into the swap chain
+		const AllocatedImage *debugImage = nullptr;
+		switch (_debugView) {
+		case EngineDebugView::DIFFUSE_ALBEDO: debugImage = &_diffuseAlbedoImage; break;
+		case EngineDebugView::SPECULAR_ALBEDO: debugImage = &_specularAlbedoImage; break;
+		case EngineDebugView::NORMALS: debugImage = &_normalRoughnessImage; break;
+		case EngineDebugView::DEPTH: debugImage = &_viewDepthImage; break;
+		case EngineDebugView::ORCA_ALBEDO: debugImage = &_orcaAlbedoImage; break;
+		default: break;
+		}
+
+		util::transitionImageLayout(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		swapChainLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+		VkImageSubresourceRange clearRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
+		VkClearColorValue clearValue = { { 0.f, 0.f, 0.f, 1.f } };
+		vkCmdClearColorImage(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearValue, 1, &clearRange);
+
+		util::transitionImageLayout(commandBuffer, debugImage->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+
+		VkImageBlit2 blitRegion{ .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2 };
+		blitRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		blitRegion.srcOffsets[1] = { static_cast<int32_t>(_renderExtent.width), static_cast<int32_t>(_renderExtent.height), 1 };
+		blitRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		blitRegion.dstOffsets[1] = { static_cast<int32_t>(_swapChainExtent.width), static_cast<int32_t>(_swapChainExtent.height), 1 };
+
+		VkBlitImageInfo2 blitInfo{ .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2 };
+		blitInfo.srcImage = debugImage->image;
+		blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		blitInfo.dstImage = swapChainImage;
+		blitInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		blitInfo.regionCount = 1;
+		blitInfo.pRegions = &blitRegion;
+		blitInfo.filter = VK_FILTER_NEAREST; //Linear filtering isn't guaranteed for R32_SFLOAT (depth)
+
+		vkCmdBlitImage2(commandBuffer, &blitInfo);
+	}
 
 	if (_showGui) {
-		util::transitionImageLayout(commandBuffer, _swapChainImages[swapChainImageIndex], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+		util::transitionImageLayout(commandBuffer, swapChainImage, swapChainLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
 		drawImgui(commandBuffer, _swapChainImageViews[swapChainImageIndex]);
 
 		//Transition image for presentation
-		util::transitionImageLayout(commandBuffer, _swapChainImages[swapChainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+		util::transitionImageLayout(commandBuffer, swapChainImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 	}
 	else {
-		util::transitionImageLayout(commandBuffer, _swapChainImages[swapChainImageIndex], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+		util::transitionImageLayout(commandBuffer, swapChainImage, swapChainLayout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 	}
-	
+
 
 	VK_CHECK(vkEndCommandBuffer(commandBuffer));
 
@@ -1390,10 +1575,11 @@ void Engine::init() {
 	_loaded = true;
 
 	//Load default scene
-	std::string path = "./models/cornellbox_transmission.glb";
+	std::string path = "./models/cornellbox_anims.glb";
 	loadScene(path);
 
 	createSharcBuffers();
+	initGPUHashMap();
 
 	initPipelinePathtracer();
 	initPipelineUpdate();
@@ -1401,6 +1587,8 @@ void Engine::init() {
 	initPipelinePost();
 
 	initImgui();
+
+	_start = std::chrono::steady_clock::now();
 }
 
 void Engine::run() {

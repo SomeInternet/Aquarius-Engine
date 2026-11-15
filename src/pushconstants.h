@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include "util.h"
+#include "hashmap.h"
 
 struct SceneData {
 	VkDeviceAddress deviceSubMeshes;
@@ -25,6 +26,7 @@ struct PushConstantsPathtracer {
 
 	VkDeviceAddress tlas;
 	VkDeviceAddress sceneData;
+	VkDeviceAddress hashMap;
 
 	float fov;
 	uint32_t totalFrames{ 0 };
