@@ -8,7 +8,7 @@
 
 //Data structures needed to link finer voxels to coarser voxels
 
-#define HASHMAP_UNALLOCATED ~0
+#define HASHMAP_UNALLOCATED 0xffffffffu
 #define MIN_LOD -4
 #define MAX_LOD 3
 #define DIR_QUANTIZATION_BITS 4
@@ -46,9 +46,11 @@ inline uint32_t quantizeDir(float3 dir) {
 }
 
 inline uint64_t quantizePos(float3 pos, int lod) {
-    uint3 voxelPos = floor(pos / (1 << lod));
+    // Potential overflow issues here
+    lod -= MIN_LOD;
+    uint16_t3 voxelPos = (int3(floor(pos / (1 << lod))) & 0xffff);
 
-    return uint64_t(voxelPos[0] << 32) | uint64_t(voxelPos[1] << 16) | uint64_t(voxelPos[2]);
+    return reinterpret<uint64_t>(voxelPos[0] << 32 | voxelPos[1] << 16 | voxelPos[2]);
 }
 
 inline uint64_t quantize(float3 dir, float3 pos, int lod) {
@@ -64,7 +66,7 @@ inline void hashVertex(float3 dir, float3 pos, int lod, inout uint32_t startAddr
 
     uint64_t hashed = hash(sK);
     startAddress = uint32_t(hashed >> 32);
-    startAddress = (startAddress == ~0) ? startAddress - 1 : startAddress;
+
     checkSum = uint32_t(hashed & (~0));
     checkSum = (checkSum == ~0) ? checkSum - 1 : checkSum;
 }
@@ -88,15 +90,14 @@ HashMapResult insert(RWStructuredBuffer<uint32_t> checkSums, RWStructuredBuffer<
         // Atomically update value, counter
         InterlockedCompareExchange(checkSums[finalAddress], HASHMAP_UNALLOCATED, checkSum, mapValue);
         if (mapValue == HASHMAP_UNALLOCATED || mapValue == checkSum) {
-            if (mapValue == HASHMAP_UNALLOCATED) {
-                uint3 radianceInt = round(clamp(radiance * RADIANCE_CONVERSION_SCALE, float3(0.f), float3(32767.f)));
+            uint3 radianceInt = round(clamp(radiance * RADIANCE_CONVERSION_SCALE, float3(0.f), float3(32767.f)));
 
-                //Prone to overflow, we should examine if it's an issue and address it potentially
-                InterlockedAdd(radiances[finalAddress * 3], radianceInt[0]);
-                InterlockedAdd(radiances[finalAddress * 3 + 1], radianceInt[1]);
-                InterlockedAdd(radiances[finalAddress * 3 + 2], radianceInt[2]);
-                InterlockedAdd(counts[finalAddress], 1);
-            }
+            // Prone to overflow, we should examine if it's an issue and address it potentially
+            if (radianceInt.x > 0) InterlockedAdd(radiances[finalAddress * 3], radianceInt.x);
+            if (radianceInt.y > 0) InterlockedAdd(radiances[finalAddress * 3 + 1], radianceInt.y);
+            if (radianceInt.z > 0) InterlockedAdd(radiances[finalAddress * 3 + 2], radianceInt.z);
+
+            InterlockedAdd(counts[finalAddress], 1);
             // Found empty slot or existing entry. Break out of loop
             entry = SEARCH_LENGTH;
         }
@@ -112,7 +113,18 @@ HashMapResult populate(RWStructuredBuffer<uint32_t> checkSums, RWStructuredBuffe
                        RWStructuredBuffer<uint32_t> counts, RWStructuredBuffer<uint32_t> childAddresses,
                        uint32_t hashMapSize, float3 dir, float3 pos, float3 radiance,
     inout uint32_t finalAddress, inout uint32_t checkSum) {
-    for (int i = 0; i < MIN_LOD, i >= MAX_LOD; ++i) {}
+
+    uint32_t finalAddress, checkSum;
+    if (insert(checkSums, radiances, counts, hashMapSize, dir, pos, MIN_LOD, radiance, finalAddress, checkSum) == HashMapResult::ENTRY_NOT_FOUND) return HashMapResult::ENTRY_NOT_FOUND;
+    for (int i = MIN_LOD + 1; i < MAX_LOD; ++i) {
+        uint32_t address;
+
+        //"Allocate" child and link the parent
+        if (insert(checkSums, radiances, counts, hashMapSize, dir, pos, MIN_LOD, float3(0.f), address, checkSum) == HashMapResult::ENTRY_NOT_FOUND) return HashMapResult::ENTRY_NOT_FOUND;
+        childAddresses[finalAddress] = address;
+        finalAddress = address;
+    }
+
 }
 
 HashMapResult query(RWStructuredBuffer<uint32_t> checkSums, RWStructuredBuffer<uint32_t> radiances, uint32_t hashMapSize, 
