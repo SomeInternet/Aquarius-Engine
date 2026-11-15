@@ -16,6 +16,18 @@ struct HashMap {
     uint32_t *childAddressBuffer;
 };
 
+struct DownrezLayer {
+    uint32_t size;
+    uint32_t *list;
+};
+
+struct PushConstantsDownrez {
+    HashMap *hashMap;
+
+    DownrezLayer *currLayer;
+    DownrezLayer *nextLayer;
+};
+
 //Struct definitions
 struct Vertex {
 	half2 uv;
