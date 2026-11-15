@@ -932,11 +932,7 @@ void Engine::createSharcBuffers() {
 }
 
 void Engine::updateSharc(VkCommandBuffer commandBuffer) {
-	SharcConfig config{};
-	config.sceneScale = _sharcSceneScale;
 	auto &configBuffer = getCurrFrame()._sharcConfigBuffer;
-	memcpy(configBuffer.info.pMappedData, &config, sizeof(config));
-	_allocator.flush(configBuffer);
 
 	PushDataSharc push{};
 	push.pathtracer = _pcpt;
@@ -1193,6 +1189,9 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	if (lensRadius != _pcpt.lensRadius) _frameNum = 0;
 	_pcpt.lensRadius = lensRadius;
 
+	if (ImGui::Checkbox("SHaRC enabled", &_sharcEnabled)) _frameNum = 0;
+	if (ImGui::Checkbox("SHaRC bounce heatmap", &_sharcHeatmap)) _frameNum = 0;
+
 	int accumulationFrames = static_cast<int>(_sharcAccumulationFrameNum);
 	ImGui::SliderInt("SHaRC accumulation frames", &accumulationFrames, 1, 128);
 	if (static_cast<uint32_t>(accumulationFrames) != _sharcAccumulationFrameNum) _frameNum = 0;
@@ -1357,9 +1356,22 @@ void Engine::draw() {
 	_pcpt.totalFrames = _totalFrames;
 	_pcpt.hashMap = hashMap.hashMapUniformBuffer.address;
 
-	// SHaRC order is update, resolve, then the render query.
-	updateSharc(commandBuffer);
-	resolveSharc(commandBuffer);
+	SharcConfig config{};
+	config.sceneScale = _sharcSceneScale;
+	auto &configBuffer = getCurrFrame()._sharcConfigBuffer;
+	memcpy(configBuffer.info.pMappedData, &config, sizeof(config));
+	_allocator.flush(configBuffer);
+
+	// only do update resolve when sharc on
+	uint32_t flags = 0;
+	if (_sharcEnabled) flags |= SHARC;
+	if (_sharcHeatmap) flags |= SHARC_HEATMAP;
+	_pcpt.flags = static_cast<EngineStateFlags>(flags);
+
+	if (_sharcEnabled) {
+		updateSharc(commandBuffer);
+		resolveSharc(commandBuffer);
+	}
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelinePathtracer);
 
