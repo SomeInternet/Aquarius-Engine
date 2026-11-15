@@ -123,7 +123,7 @@ void rayGeneration() {
                 // second hit, cache to hashmap
                 uint address, checkSum;
                 insert(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
-                    250000, payload.sharcNormalWorld, payload.sharcPositionWorld, 0,
+                    NUM_HASH_MAP_ENTRIES, payload.sharcNormalWorld, payload.sharcPositionWorld, MIN_LOD,
                     payload.albedo, address, checkSum);
             }
 

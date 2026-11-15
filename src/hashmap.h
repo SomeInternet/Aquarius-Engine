@@ -19,10 +19,10 @@ struct HashMap {
 	AllocatedBuffer hashMapUniformBuffer{};
 
 	HashMap(Allocator &allocator, int numEntries = NUM_HASH_MAP_ENTRIES): 
-		checkSumBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
-		radianceBuffer(allocator.createBuffer(numEntries * sizeof(int) * 3, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
-		countBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
-		childAddressBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY))
+		checkSumBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
+		radianceBuffer(allocator.createBuffer(numEntries * sizeof(int) * 3, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
+		countBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
+		childAddressBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY))
 	{
 		HashMapUniformBuffer hashMapUniforms{
 			checkSumBuffer.address, radianceBuffer.address, countBuffer.address, childAddressBuffer.address

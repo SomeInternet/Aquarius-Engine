@@ -110,6 +110,34 @@ HashMapResult insert(uint32_t *checkSums, uint3 *radiances, uint32_t *counts,
     else return HashMapResult::ENTRY_NOT_FOUND;
 }
 
+HashMapResult allocate(uint32_t *checkSums, uint3 *radiances, uint32_t *counts, 
+    uint32_t hashMapSize, float3 dir, float3 pos, int lod, inout uint32_t finalAddress, inout uint32_t checkSum) {
+
+    uint32_t startAddress;
+    hashVertex(dir, pos, lod, startAddress, checkSum);
+
+    uint32_t mapValue;
+    // check the hashmap entry, find the first non-collision
+    finalAddress = startAddress;
+    for (uint32_t entry = 0; entry < SEARCH_LENGTH; ++entry) {
+        finalAddress = (startAddress + entry) % hashMapSize;
+
+        // Update the entry in the checksum array
+        // atomicCX(hashMap[finalAddress], HASHMAP_UNALLOCATED, checksum, mapValue);
+
+        // Atomically update value, counter
+        InterlockedCompareExchange(checkSums[finalAddress], HASHMAP_UNALLOCATED, checkSum, mapValue);
+        if (mapValue == HASHMAP_UNALLOCATED || mapValue == checkSum) {
+            // Found empty slot or existing entry. Break out of loop
+            entry = SEARCH_LENGTH;
+        }
+    }
+
+    if (mapValue == HASHMAP_UNALLOCATED) return HashMapResult::ENTRY_UNALLOCATED;
+    else if (mapValue == checkSum) return HashMapResult::ENTRY_FOUND;
+    else return HashMapResult::ENTRY_NOT_FOUND;
+}
+
 //Populate is like insert, but allocates all descendant voxels while inserting the child at the finest LOD
 HashMapResult populate(uint32_t *checkSums, uint3 *radiances,
                        uint32_t *counts, uint32_t *childAddresses,
@@ -122,7 +150,7 @@ HashMapResult populate(uint32_t *checkSums, uint3 *radiances,
         uint32_t address;
 
         //"Allocate" child and link the parent
-        if (insert(checkSums, radiances, counts, hashMapSize, dir, pos, i, float3(0.f), address, checkSum) == HashMapResult::ENTRY_NOT_FOUND) return res;
+        if (allocate(checkSums, radiances, counts, hashMapSize, dir, pos, i, address, checkSum) == HashMapResult::ENTRY_NOT_FOUND) return res;
         childAddresses[finalAddress] = address;
         finalAddress = address;
     }

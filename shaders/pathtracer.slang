@@ -56,13 +56,12 @@ void rayGeneration() {
         seed = payload.seed;
 
         // Temp, visualize second-hit samples from hashmap queries
-        if (!hashMapQueried && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
+        if (i && !hashMapQueried && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
             hashMapQueried = true;
             uint address;
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-            if (query(pc.hashMap->checkSumBuffer, 250000, payload.hitNor, hitPos,
-                0, address) == HashMapResult::ENTRY_FOUND)
-                cachedAlbedo = pc.hashMap->radianceBuffer[address];
+            if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, payload.hitNor, hitPos,
+                MIN_LOD, cachedAlbedo) == HashMapResult::ENTRY_FOUND);
         }
 
         // SHARC QUERY/RENDER stage integration
