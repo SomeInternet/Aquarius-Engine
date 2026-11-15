@@ -52,8 +52,8 @@ static VkDescriptorSetAndBindingMappingEXT pushAddressMapping(uint32_t binding, 
 	mapping.firstBinding = binding;
 	mapping.bindingCount = 1; 
 	mapping.resourceMask = mask;
-	mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_ADDRESS_EXT;
-	mapping.sourceData.pushAddressOffset = pushOffset;
+	mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_ADDRESS_EXT; //Address sourced from a push constant
+	mapping.sourceData.pushAddressOffset = pushOffset; //Within the push constant, address found at this offset
 	return mapping;
 }
 
@@ -1105,17 +1105,7 @@ void Engine::initPipelinePost() {
 	_deletionQueue.push([this]() {vkDestroyPipeline(_device, _pipelinePost, nullptr); });
 }
 
-void Engine::initGPUHashMap() {
-	_hashMapCheckSumBuffer = _allocator.createBuffer(NUM_HASH_MAP_ENTRIES * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, false);
-	_hashMapCountsBuffer = _allocator.createBuffer(NUM_HASH_MAP_ENTRIES * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, false);
-	_hashMapValuesBuffer = _allocator.createBuffer(NUM_HASH_MAP_ENTRIES * sizeof(glm::vec3), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY, false);
-
-	_hashMapUniformBuffer = _allocator.createBuffer(sizeof(HashMap), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-	
-	HashMap hashMap{ _hashMapCheckSumBuffer.address, _hashMapCountsBuffer.address, _hashMapValuesBuffer.address };
-	memcpy(_hashMapUniformBuffer.info.pMappedData, &hashMap, sizeof(HashMap));
-	_allocator.flush(_hashMapUniformBuffer);
-
+void Engine::initGPUHashMaps() {
 	_deletionQueue.push([=]() {
 		_allocator.destroyBuffer(_hashMapCheckSumBuffer);
 		_allocator.destroyBuffer(_hashMapCountsBuffer);
@@ -1123,6 +1113,13 @@ void Engine::initGPUHashMap() {
 
 		_allocator.destroyBuffer(_hashMapUniformBuffer);
 		});
+
+	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i) _hashMaps.emplace_back(_allocator);
+
+	_deletionQueue.push([=]() {
+		for (auto &hashMap : _hashMaps) hashMap.destroy(_allocator);
+		_hashMaps.clear();
+	});
 }
 
 void Engine::initImgui() {

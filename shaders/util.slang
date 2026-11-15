@@ -10,9 +10,10 @@
 #define HDR_IMAGES 1
 
 struct HashMap {
-    uint32_t *hashMapCheckSums;
-    uint32_t *hashMapCounts;
-    float3 *hashMapValues;
+    uint32_t *checkSumBuffer;
+    uint3 *radianceBuffer;
+    uint32_t *countBuffer;
+    uint32_t *childAddressBuffer;
 };
 
 //Struct definitions

@@ -45,8 +45,6 @@ constexpr int HEIGHT = 1080;
 constexpr int MAX_SWAPCHAIN_SIZE = 4;
 constexpr int FRAMES_IN_FLIGHT = 3;
 
-constexpr int NUM_HASH_MAP_ENTRIES = 250000;
-
 //DLSS images also serve as the g-buffer for ORCA
 //0: radiance image
 //1: diffuse-albedo (+metallic)
@@ -196,7 +194,9 @@ private:
 	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 
-	//GPU hash map
+	//GPU hash maps
+	std::vector<HashMap> _hashMaps;
+
 	AllocatedBuffer _hashMapCheckSumBuffer{};
 	AllocatedBuffer _hashMapValuesBuffer{};
 	AllocatedBuffer _hashMapCountsBuffer{};
@@ -263,7 +263,7 @@ private:
 	void updateSharc(VkCommandBuffer commandBuffer);
 	void resolveSharc(VkCommandBuffer commandBuffer);
 
-	void initGPUHashMap();
+	void initGPUHashMaps();
 
 	void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 	void draw();

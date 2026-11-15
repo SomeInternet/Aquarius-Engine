@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include "util.h"
+#include "hashmap.h"
 
 struct SceneData {
 	VkDeviceAddress deviceSubMeshes;
@@ -15,12 +16,6 @@ struct SceneData {
 	uint32_t nLights{ 0 };
 	float totalLightWeight{ 0.f };
 	float totalEnvWeight{ 0.f };
-};
-
-struct HashMap {
-	VkDeviceAddress hashMapCheckSums;
-	VkDeviceAddress hashMapCounts;
-	VkDeviceAddress hashMapValues;
 };
 
 struct PushConstantsPathtracer {
