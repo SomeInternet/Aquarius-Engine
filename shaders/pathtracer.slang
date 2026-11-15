@@ -36,8 +36,9 @@ void rayGeneration() {
     float3 throughput = float3(1.f);
     float3 accumulatedLight = float3(0.f);
     float prevBsdfPdf = 0.f; // 0 when no light was sampled at the previous vertex (camera ray), so hitting a light gets the full weight
-    
+
     float prevRoughness = 1.f;
+    uint depth = 0; // track bounces (sharc)
     
     #if SHARC_QUERY
         SharcParameters params = createSharcParams(pc.camPos, sharcConfigBuffer[0], sharcHashEntries, sharcAccumulation, sharcResolved, sharcLockBuffer);
@@ -47,6 +48,7 @@ void rayGeneration() {
     float3 cachedAlbedo = float3(0.f);
     bool hashMapQueried = false;
     for (uint i = 0; i < pc.maxBounces; ++i) {
+        depth = i;
         payload.seed = seed;
 
         //For SER
@@ -67,8 +69,8 @@ void rayGeneration() {
 
         // SHARC QUERY/RENDER stage integration
         // we not considering the first (direct) bounce, if cache hit we use cache and terminate
-        #if SHARC_QUERY
-        if (hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
+#if SHARC_QUERY
+        if ((pc.flags & EngineStateFlags::SHARC) && hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
             float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, params.hashGridParameters), params.hashGridParameters);
             // cannot be shorter than voxel length
@@ -121,6 +123,12 @@ void rayGeneration() {
 
         ray.Origin = payload.rayOrigin;
         ray.Direction = payload.rayDir;
+    }
+
+    if (pc.flags & EngineStateFlags::SHARC_HEATMAP) {
+        accumulatedLight = depth == 0   ? float3(0.f, 0.f, 1.f)
+                           : depth == 1 ? float3(0.f, 1.f, 0.f)
+                                        : float3(1.f, 0.f, 0.f);
     }
 
     /*
