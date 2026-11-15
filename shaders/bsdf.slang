@@ -293,13 +293,12 @@ inline void evalCookTorrance2(float3 wo, float3 wi, PBR pbr, out float3 bsdf, in
     float pDielectric = 1.f - m - pDiffuse;
 
     // Write out diffuse and specular albedos
+    specular = envBRDFApprox2(lerp(float3(.04f), pbr.color.xyz, pbr.metallicRoughness.x), pbr.metallicRoughness.y * pbr.metallicRoughness.y, wo.z);
     diffuse = (pbr.color * (1.f - m)).xyz * (1.f - fn);
 
     if (wi.z < 0) { // Transmissive
         float3 wh = normalize(pbr.etaA * wo + pbr.etaB * wi);
         if (wh.z < 0.f) wh = -wh;
-
-        specular = envBRDFApprox2(lerp(pbr.metallicRoughness.x, float3(.04f), pbr.color.xyz), pbr.metallicRoughness.y * pbr.metallicRoughness.y, dot(wh));
 
         if (dot(wh, wi) >= 0.f || dot(wo, wh) < 0.f || pbr.etaA == pbr.etaB) {
             bsdf = float3(0.f);
@@ -328,7 +327,7 @@ inline void evalCookTorrance2(float3 wo, float3 wi, PBR pbr, out float3 bsdf, in
         bsdf = prTrans * pbr.color.rgb * d * g * absDotWoWh * absDotWiWh / denom;
     } else {
         float3 wh = normalize(wo + wi);
-        specular = envBRDFApprox2(lerp(pbr.metallicRoughness.x, float3(.04f), pbr.color.xyz), pbr.metallicRoughness.y * pbr.metallicRoughness.y, dot(wh));
+        
         float fd = fDielectric(wo, wh, pbr.etaA, pbr.etaB).x;
 
         float prSpecular = (1.f - m) * fd;
