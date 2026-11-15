@@ -71,7 +71,7 @@ inline void hashVertex(float3 dir, float3 pos, int lod, inout uint32_t startAddr
     checkSum = (checkSum == ~0) ? checkSum - 1 : checkSum;
 }
 
-HashMapResult insert(RWStructuredBuffer<uint32_t> checkSums, RWStructuredBuffer<uint32_t> radiances, RWStructuredBuffer<uint32_t> counts, 
+HashMapResult insert(uint32_t* checkSums, uint3* radiances, uint32_t* counts, 
     uint32_t hashMapSize, float3 dir, float3 pos, int lod, float3 radiance,
     inout uint32_t finalAddress, inout uint32_t checkSum) {
 
@@ -93,9 +93,9 @@ HashMapResult insert(RWStructuredBuffer<uint32_t> checkSums, RWStructuredBuffer<
             uint3 radianceInt = round(clamp(radiance * RADIANCE_CONVERSION_SCALE, float3(0.f), float3(32767.f)));
 
             // Prone to overflow, we should examine if it's an issue and address it potentially
-            if (radianceInt.x > 0) InterlockedAdd(radiances[finalAddress * 3], radianceInt.x);
-            if (radianceInt.y > 0) InterlockedAdd(radiances[finalAddress * 3 + 1], radianceInt.y);
-            if (radianceInt.z > 0) InterlockedAdd(radiances[finalAddress * 3 + 2], radianceInt.z);
+            if (radianceInt.x > 0) InterlockedAdd(radiances[finalAddress].x, radianceInt.x);
+            if (radianceInt.y > 0) InterlockedAdd(radiances[finalAddress].y, radianceInt.y);
+            if (radianceInt.z > 0) InterlockedAdd(radiances[finalAddress].z, radianceInt.z);
 
             InterlockedAdd(counts[finalAddress], 1);
             // Found empty slot or existing entry. Break out of loop

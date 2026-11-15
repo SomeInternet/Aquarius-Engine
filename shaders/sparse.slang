@@ -8,6 +8,7 @@
 #include "bsdf.slang"
 #include "bindings.slang"
 #include "sampling.slang"
+#include "hashmap.slang"
 
 // SHARC
 // SHARC hash table
@@ -21,6 +22,7 @@ struct UpdateHitPayload
     float pdf;
     float3 directLight;
     uint2 seed;
+    float3 albedo; // temp for hashmap testing
 
     // More information returned to ray generation for SHARC.
     float3 sharcPositionWorld;
@@ -89,6 +91,7 @@ void rayGeneration() {
     float3 rrPathThroughput = float3(1.f);
 
     UpdateHitPayload payload = {};
+    uint surfaceHitCount = 0;
     for (uint i = 0; i < pc.maxBounces; ++i) {
         payload.seed = seed;
         payload.throughput = float3(0.f);
@@ -115,6 +118,15 @@ void rayGeneration() {
         // Valid hit
         if (payload.sharcSurfaceValid != 0)
         {
+            if (++surfaceHitCount == 2)
+            {
+                // second hit, cache to hashmap
+                uint address, checkSum;
+                insert(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
+                    250000, payload.sharcNormalWorld, payload.sharcPositionWorld, 0,
+                    payload.albedo, address, checkSum);
+            }
+
             SharcHitData sharcHitData;
             sharcHitData.positionWorld = payload.sharcPositionWorld;
             sharcHitData.normalWorld = payload.sharcNormalWorld;
@@ -245,6 +257,7 @@ void closestHit(inout UpdateHitPayload payload, in BuiltInTriangleIntersectionAt
             return;
         }
 
+        payload.albedo = pbr.color.rgb;
         pbr.transmissiveness = material.transmissiveness;
         if (material.transmissiveness == 0.f) entering = true;
         pbr.etaA = entering ? 1.f : material.ior;

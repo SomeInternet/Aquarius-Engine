@@ -7,6 +7,7 @@
 
 #include "sampling.slang"
 #include "bindings.slang"
+#include "hashmap.slang"
 // SHARC 
 
 [shader("raygeneration")]
@@ -43,6 +44,8 @@ void rayGeneration() {
     #endif
 
     HitPayload payload = {};
+    float3 cachedAlbedo = float3(0.f);
+    bool hashMapQueried = false;
     for (uint i = 0; i < pc.maxBounces; ++i) {
         payload.seed = seed;
 
@@ -51,6 +54,16 @@ void rayGeneration() {
         ReorderThread(hitObject);
         HitObject::Invoke<HitPayload>(tlas, hitObject, payload);
         seed = payload.seed;
+
+        // Temp, visualize second-hit samples from hashmap queries
+        if (!hashMapQueried && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
+            hashMapQueried = true;
+            uint address;
+            float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
+            if (query(pc.hashMap->checkSumBuffer, 250000, payload.hitNor, hitPos,
+                0, address) == HashMapResult::ENTRY_FOUND)
+                cachedAlbedo = pc.hashMap->radianceBuffer[address];
+        }
 
         // SHARC QUERY/RENDER stage integration
         // we not considering the first (direct) bounce, if cache hit we use cache and terminate
@@ -110,6 +123,7 @@ void rayGeneration() {
         ray.Direction = payload.rayDir;
     }
 
+    /*
     if (pc.flags & EngineStateFlags::RAY_RECONSTRUCTION) {
         radianceImage[DispatchRaysIndex().xy] = radianceImage[DispatchRaysIndex().xy] * float(pc.frameNum) / float(pc.frameNum + 1) +
             float4(accumulatedLight, 1.f) * 1.f / float(pc.frameNum + 1);
@@ -117,6 +131,10 @@ void rayGeneration() {
         radianceImage[DispatchRaysIndex().xy] = radianceImage[DispatchRaysIndex().xy] * float(pc.frameNum) / float(pc.frameNum + 1) +
             float4(accumulatedLight, 1.f) * 1.f / float(pc.frameNum + 1);
     }
+    */
+
+    //only output albedo stored by hash for testing
+    radianceImage[DispatchRaysIndex().xy] = float4(cachedAlbedo, 1.f);
 }
 
 [shader("closesthit")]
@@ -138,6 +156,9 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
             pointInfo.tan *= -1.f;
         }
     }
+
+    payload.hitLen = RayTCurrent();
+    payload.hitNor = normalize(mul(gNor, WorldToObject3x4()).xyz);
 
     // TODO: Consider an alternative to my current solution to a material index being 0
     // TODO: Drop the image and sampler indices once I'm done with them?
