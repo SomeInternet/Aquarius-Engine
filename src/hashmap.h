@@ -64,7 +64,7 @@ struct HashMap {
 	}
 
 	void resetSize(Allocator &allocator, int i) {
-		memcpy(downrezLayerBuffers[i].info.pMappedData, downrezLayers[i], sizeof(DownrezLayer));
+		memcpy(downrezLayerBuffers[i].info.pMappedData, &downrezLayers[i], sizeof(DownrezLayer));
 		allocator.flush(downrezLayerBuffers[i]);
 	}
 
