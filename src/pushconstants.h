@@ -93,3 +93,10 @@ struct PushConstantsResolve {
 	uint32_t staleFrameNumMax;
 	uint32_t frameIndex;
 };
+
+struct PushConstantsDownrez {
+	VkDeviceAddress hashMap;
+	VkDeviceAddress childAdded;
+	VkDeviceAddress currLayer;
+	VkDeviceAddress nextLayer;
+};

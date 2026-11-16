@@ -26,7 +26,7 @@
 // struct PushConstantsDownrez {
 //     HashMap *hashMap;
 
-//     uint32_t *parentAdded;
+//     uint32_t *childAdded;
 //     DownrezLayer *currLayer;
 //     DownrezLayer *nextLayer;
 // };
@@ -37,40 +37,37 @@ PushConstantsDownrez pcdr;
 [shader("compute")]
 [numthreads(BLOCK_SIZE, 1, 1)]
 void main(uint32_t threadIdx: SV_DispatchThreadID) {
-    if (threadIdx == 0) pcdr.nextLayer->size = 0;
+    //Next layer's size zeroed before dispatch
 
     if (threadIdx >= min(MAX_LAYER_SIZE, pcdr.currLayer.size)) return;
 
-    
-
-    //pcdr.hashMap.radianceBuffer
-
-    //IDK if this is the right one...
-    AllMemoryBarrierWithGroupSync();
-
+    // 1) Thread operates on parent voxel (fine)
     uint32_t sourceIdx = pcdr.currLayer->list[threadIdx];
     uint3 radiance = pcdr.hashMap->radianceBuffer[sourceIdx];
     uint count = pcdr.hashMap->countBuffer[sourceIdx];
-    if (count == 0) return;
 
     uint destIdx = pcdr.hashMap->childAddressBuffer[sourceIdx];
+    if (destIdx == HASHMAP_UNALLOCATED) return;
 
-    // check if parent exists
-
-    //if not:
-
-    uint32_t wasParentAdded;
-    InterlockedCompareExchange(pcdr.parentAdded[destIdx], 0u, 1u, wasParentAdded);
-
-    if (wasParentAdded == 1u) {
-        // add parent
-    }
-
-
+    // 2) Thread adds parent's radiance to child
+    // Potential risk of overflow...
     InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].x, radiance.x);
     InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].y, radiance.y);
     InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].z, radiance.z);
     InterlockedAdd(pcdr.hashMap->countBuffer[destIdx], count);
 
-    // add parent to next layer?
+    //3) If child (coarse) voxel is not in the list, add the voxel to the list
+    //Off the top of my head, we could use a boolean array alongside the hash table to check
+
+    uint32_t wasChildAdded;
+    InterlockedCompareExchange(pcdr.childAdded[destIdx], 0u, 1u, wasChildAdded);
+
+    if (wasChildAdded > 0u) {
+        // add child to list
+        int index;
+        InterlockedAdd(pcdr.nextLayer->size, 1, index);
+        pcdr.nextLayer->list[index] = destIdx;
+    }
+
+    //Before the next invocation, ping pong
 }

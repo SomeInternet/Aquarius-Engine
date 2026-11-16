@@ -24,7 +24,7 @@ struct DownrezLayer {
 struct PushConstantsDownrez {
     HashMap *hashMap;
 
-    uint32_t *parentAdded;
+    uint32_t *childAdded;
     DownrezLayer *currLayer;
     DownrezLayer *nextLayer;
 };

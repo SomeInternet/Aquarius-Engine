@@ -102,6 +102,7 @@ private:
 
 	VkPipeline _pipelinePathtracer;
 	VkPipeline _pipelineSharcUpdate;
+	VkPipeline _pipelineDownrez;
 	VkPipeline _pipelineResolve;
 	VkPipeline _pipelinePost;
 
@@ -258,12 +259,14 @@ private:
 
 	void initPipelinePathtracer();
 	void initPipelineUpdate();
+	void initPipelineDownrez();
 	void initPipelineResolve();
 	void initPipelinePost();
 
 	void createSharcBuffers();
 	void updateSharc(VkCommandBuffer commandBuffer);
 	void resolveSharc(VkCommandBuffer commandBuffer);
+	void downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap);
 
 	void initGPUHashMaps();
 
