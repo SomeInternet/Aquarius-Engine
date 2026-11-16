@@ -30,6 +30,12 @@ static_assert(offsetof(PushConstantsResolve, accumulationAddress) == 48);
 static_assert(offsetof(PushConstantsResolve, resolvedAddress) == 56);
 static_assert(offsetof(PushConstantsResolve, capacity) == 64);
 static_assert(offsetof(PushConstantsResolve, frameIndex) == 80);
+static_assert(sizeof(DownrezLayer) == 16);
+static_assert(offsetof(DownrezLayer, list) == 8);
+static_assert(sizeof(PushConstantsDownrez) == 32);
+static_assert(offsetof(PushConstantsDownrez, childAdded) == 8);
+static_assert(offsetof(PushConstantsDownrez, currLayer) == 16);
+static_assert(offsetof(PushConstantsDownrez, nextLayer) == 24);
 
 //Helpers to, uh, help us set up the descriptors for the shaders
 static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, uint32_t set, VkSpirvResourceTypeFlagsEXT mask, 
@@ -990,11 +996,10 @@ void Engine::initPipelineResolve() {
 void Engine::initPipelineDownrez() {
 	VkShaderModule moduleDownrez = util::loadShaderModule("./build/shaders/downrez.spv", _device);
 
-	std::array mappings = {};
-
+	// downrez.slang takes device pointers in the push constant, so it has no descriptor bindings.
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
-	mappingInfo.mappingCount = static_cast<uint32_t>(mappings.size());
-	mappingInfo.pMappings = mappings.data();
+	mappingInfo.mappingCount = 0;
+	mappingInfo.pMappings = nullptr;
 
 	VkPipelineCreateFlags2CreateInfo flags{ .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO };
 	flags.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
@@ -1002,7 +1007,7 @@ void Engine::initPipelineDownrez() {
 	VkPipelineShaderStageCreateInfo shaderStage{ .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
 	shaderStage.pNext = &mappingInfo;
 	shaderStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-	shaderStage.module = moduleResolve;
+	shaderStage.module = moduleDownrez;
 	shaderStage.pName = "main";
 
 	VkComputePipelineCreateInfo pipelineInfo{ .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
@@ -1018,25 +1023,24 @@ void Engine::initPipelineDownrez() {
 }
 
 void Engine::downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap) {
-	const glm::vec3 cameraPosition = _pcpt.camPos;
-	if (!_sharcCameraInitialized) {
-		_sharcCameraPositionPrev = cameraPosition;
-		_sharcCameraInitialized = true;
-	}
-
-	const std::array<VkBuffer, 3> cacheBuffers = {
-		_sharcHashEntries.buffer,
-		_sharcAccumulation.buffer,
-		_sharcResolved.buffer
+	constexpr size_t bufferCount = 8;
+	const std::array<VkBuffer, bufferCount> buffers = {
+		hashmap.radianceBuffer.buffer,
+		hashmap.countBuffer.buffer,
+		hashmap.childAddressBuffer.buffer,
+		hashmap.childAdded.buffer,
+		hashmap.downrezLists[0].buffer,
+		hashmap.downrezLists[1].buffer,
+		hashmap.downrezLayerBuffers[0].buffer,
+		hashmap.downrezLayerBuffers[1].buffer,
 	};
 
-	// Update (ray tracing) writes the cache before this dispatch. The render pass
-	// reads the resolved records afterwards. Both sides are still stubs, so the
-	// barriers are what keeps those passes ordered once they land in this buffer.
-	auto cacheDependency = [&](VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+	// updateSharc may have written the hash map, and each dispatch appends the next
+	// coarser layer. The following pass has to see those writes.
+	auto barrier = [&](VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
 		VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-			std::array<VkBufferMemoryBarrier2, 3> barriers{};
-			for (size_t i = 0; i < cacheBuffers.size(); ++i) {
+			std::array<VkBufferMemoryBarrier2, bufferCount> barriers{};
+			for (size_t i = 0; i < buffers.size(); ++i) {
 				barriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
 				barriers[i].srcStageMask = srcStage;
 				barriers[i].srcAccessMask = srcAccess;
@@ -1044,7 +1048,7 @@ void Engine::downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap) {
 				barriers[i].dstAccessMask = dstAccess;
 				barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 				barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				barriers[i].buffer = cacheBuffers[i];
+				barriers[i].buffer = buffers[i];
 				barriers[i].size = VK_WHOLE_SIZE;
 			}
 
@@ -1054,45 +1058,53 @@ void Engine::downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap) {
 			vkCmdPipelineBarrier2(commandBuffer, &dependency);
 		};
 
-	cacheDependency(
-		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-		VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-		VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineDownrez);
 
-	PushConstantsResolve pc{};
-	pc.cameraPosition = cameraPosition;
-	pc.logarithmBase = SHARC_LOGARITHM_BASE;
-	pc.sceneScale = _sharcSceneScale;
-	pc.levelBias = SHARC_LEVEL_BIAS;
-	pc.cameraPositionPrev = _sharcCameraPositionPrev;
-	pc.radianceScale = SHARC_RADIANCE_SCALE;
-	pc.hashEntriesAddress = _sharcHashEntries.address;
-	pc.accumulationAddress = _sharcAccumulation.address;
-	pc.resolvedAddress = _sharcResolved.address;
-	pc.capacity = SHARC_CAPACITY;
-	pc.accumulationFrameNum = _sharcAccumulationFrameNum;
-	pc.responsiveFrameNum = _sharcAccumulationFrameNum;
-	pc.staleFrameNumMax = _sharcStaleFrameNumMax;
-	pc.frameIndex = _totalFrames;
+	// Layer 0 holds the finest LOD. Ping-pong until those voxels have been folded up to MAX_LOD.
+	uint32_t curr = 0;
+	for (int lod = HASHMAP_MIN_LOD; lod < HASHMAP_MAX_LOD; ++lod) {
+		const uint32_t next = curr ^ 1u;
 
-	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineResolve);
+		barrier(
+			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+			VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+			VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
-	VkPushDataInfoEXT pushData{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
-	pushData.offset = 0;
-	pushData.data = { &pc, sizeof(PushConstantsResolve) };
-	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushData);
+		// The shader comment: the next layer's counter is zeroed before the dispatch.
+		// childAdded keeps a coarse voxel from being appended once per fine child.
+		vkCmdFillBuffer(commandBuffer, hashmap.downrezLayerBuffers[next].buffer, offsetof(DownrezLayer, size), sizeof(uint32_t), 0);
+		vkCmdFillBuffer(commandBuffer, hashmap.childAdded.buffer, 0, VK_WHOLE_SIZE, 0);
 
-	const uint32_t groups = (SHARC_CAPACITY + SHARC_RESOLVE_BLOCK_SIZE - 1) / SHARC_RESOLVE_BLOCK_SIZE;
-	vkCmdDispatch(commandBuffer, groups, 1, 1);
+		barrier(
+			VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+			VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+			VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-	cacheDependency(
+		PushConstantsDownrez pc{};
+		pc.hashMap = hashmap.hashMapUniformBuffer.address;
+		pc.childAdded = hashmap.childAdded.address;
+		pc.currLayer = hashmap.downrezLayerBuffers[curr].address;
+		pc.nextLayer = hashmap.downrezLayerBuffers[next].address;
+
+		VkPushDataInfoEXT pushData{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
+		pushData.offset = 0;
+		pushData.data = { &pc, sizeof(pc) };
+		_dispatchTable.cmdPushDataEXT(commandBuffer, &pushData);
+
+		// The layer length lives on the GPU, so launch the full list and let the shader discard the tail.
+		const uint32_t groups = (static_cast<uint32_t>(LIST_SIZE) + DOWNREZ_BLOCK_SIZE - 1) / DOWNREZ_BLOCK_SIZE;
+		vkCmdDispatch(commandBuffer, groups, 1, 1);
+
+		curr = next;
+	}
+
+	barrier(
 		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
 		VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
 		VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-		VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
-
-	_sharcCameraPositionPrev = cameraPosition;
+		VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 }
 
 void Engine::resolveSharc(VkCommandBuffer commandBuffer) {
@@ -1442,7 +1454,7 @@ void Engine::draw() {
 	vkCmdFillBuffer(commandBuffer, hashMap.checkSumBuffer.buffer, 0, VK_WHOLE_SIZE, ~0u);
 	vkCmdFillBuffer(commandBuffer, hashMap.radianceBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
 	vkCmdFillBuffer(commandBuffer, hashMap.countBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
-	vkCmdFillBuffer(commandBuffer, hashMap.childAddressBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
+	vkCmdFillBuffer(commandBuffer, hashMap.childAddressBuffer.buffer, 0, VK_WHOLE_SIZE, ~0u);
 
 	//Post barrier
 	VkMemoryBarrier2 postClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
@@ -1478,6 +1490,7 @@ void Engine::draw() {
 
 	if (_sharcEnabled) {
 		updateSharc(commandBuffer);
+		downrezHashMap(commandBuffer, hashMap);
 		resolveSharc(commandBuffer);
 	}
 
@@ -1685,6 +1698,7 @@ void Engine::init() {
 
 	initPipelinePathtracer();
 	initPipelineUpdate();
+	initPipelineDownrez();
 	initPipelineResolve();
 	initPipelinePost();
 

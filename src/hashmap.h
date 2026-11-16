@@ -4,6 +4,12 @@
 constexpr int NUM_HASH_MAP_ENTRIES = 1036800; //1920 * 1080 * 6 (LODs) / 16
 constexpr int LIST_SIZE = 32767;
 
+// Match MIN_LOD, MAX_LOD, and BLOCK_SIZE in shaders/hashmap.slang and shaders/downrez.slang.
+// Each downrez dispatch folds one level into the next, stopping at the coarsest.
+constexpr int HASHMAP_MIN_LOD = -4;
+constexpr int HASHMAP_MAX_LOD = 3;
+constexpr uint32_t DOWNREZ_BLOCK_SIZE = 256;
+
 struct DownrezLayer {
 	uint32_t size = 0;
 	VkDeviceAddress list{};
@@ -21,6 +27,7 @@ struct HashMap {
 	AllocatedBuffer radianceBuffer{};
 	AllocatedBuffer countBuffer{};
 	AllocatedBuffer childAddressBuffer{};
+	AllocatedBuffer childAdded{};
 
 	AllocatedBuffer hashMapUniformBuffer{};
 
@@ -32,7 +39,8 @@ struct HashMap {
 		checkSumBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
 		radianceBuffer(allocator.createBuffer(numEntries * sizeof(int) * 3, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
 		countBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
-		childAddressBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY))
+		childAddressBuffer(allocator.createBuffer(numEntries * sizeof(int), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY)),
+		childAdded(allocator.createBuffer(numEntries * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, false))
 	{
 		downrezLists = {
 			allocator.createBuffer(sizeof(uint32_t) * LIST_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY),
@@ -65,6 +73,7 @@ struct HashMap {
 		allocator.destroyBuffer(radianceBuffer);
 		allocator.destroyBuffer(countBuffer);
 		allocator.destroyBuffer(childAddressBuffer);
+		allocator.destroyBuffer(childAdded);
 
 		allocator.destroyBuffer(hashMapUniformBuffer);
 
