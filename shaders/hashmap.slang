@@ -11,6 +11,9 @@
 #define HASHMAP_UNALLOCATED 0xffffffffu
 #define MIN_LOD -4
 #define MAX_LOD 3
+#ifndef MAX_LAYER_SIZE
+#define MAX_LAYER_SIZE 32767
+#endif
 #define DIR_QUANTIZATION_BITS 4
 #define SEARCH_LENGTH 100
 #define NUM_HASH_MAP_ENTRIES 1036800
@@ -138,14 +141,17 @@ HashMapResult allocate(uint32_t *checkSums, uint3 *radiances, uint32_t *counts,
     else return HashMapResult::ENTRY_NOT_FOUND;
 }
 
-//Populate is like insert, but allocates all descendant voxels while inserting the child at the finest LOD
+//Populate is like insert, but allocates all descendant voxels while inserting the child at the finest LOD.
+//finestAddress stays the MIN_LOD slot; the loop walks the coarser parents separately.
 HashMapResult populate(uint32_t *checkSums, uint3 *radiances,
                        uint32_t *counts, uint32_t *childAddresses,
-                       uint32_t hashMapSize, float3 dir, float3 pos, float3 radiance) {
+                       uint32_t hashMapSize, float3 dir, float3 pos, float3 radiance,
+                       inout uint32_t finestAddress) {
 
-    uint32_t finalAddress, checkSum;
-    HashMapResult res = insert(checkSums, radiances, counts, hashMapSize, dir, pos, MIN_LOD, radiance, finalAddress, checkSum);
+    uint32_t checkSum;
+    HashMapResult res = insert(checkSums, radiances, counts, hashMapSize, dir, pos, MIN_LOD, radiance, finestAddress, checkSum);
     if (res == HashMapResult::ENTRY_NOT_FOUND) return HashMapResult::ENTRY_NOT_FOUND;
+    uint32_t finalAddress = finestAddress;
     for (int i = MIN_LOD + 1; i <= MAX_LOD; ++i) {
         uint32_t address;
 

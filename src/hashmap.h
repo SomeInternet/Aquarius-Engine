@@ -20,6 +20,7 @@ struct HashMapUniformBuffer {
 	VkDeviceAddress radianceBuffer{};
 	VkDeviceAddress countBuffer{};
 	VkDeviceAddress childAddressBuffer{};
+	VkDeviceAddress finestLayer{};
 };
 
 struct HashMap {
@@ -58,7 +59,8 @@ struct HashMap {
 		};
 
 		HashMapUniformBuffer hashMapUniforms{
-			checkSumBuffer.address, radianceBuffer.address, countBuffer.address, childAddressBuffer.address
+			checkSumBuffer.address, radianceBuffer.address, countBuffer.address, childAddressBuffer.address,
+			downrezLayerBuffers[0].address
 		};
 		hashMapUniformBuffer = allocator.uploadBuffer(&hashMapUniforms, sizeof(HashMapUniformBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY);
 	}

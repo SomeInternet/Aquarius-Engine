@@ -1456,6 +1456,9 @@ void Engine::draw() {
 	vkCmdFillBuffer(commandBuffer, hashMap.countBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
 	vkCmdFillBuffer(commandBuffer, hashMap.childAddressBuffer.buffer, 0, VK_WHOLE_SIZE, ~0u);
 
+	// reseting downrezLayerBuffers b/c every frame, the hashmap is clear and every voxel is allocated again 
+	vkCmdFillBuffer(commandBuffer, hashMap.downrezLayerBuffers[0].buffer, offsetof(DownrezLayer, size), sizeof(uint32_t), 0); 
+
 	//Post barrier
 	VkMemoryBarrier2 postClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
 	postClear.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
