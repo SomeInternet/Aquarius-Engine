@@ -26,6 +26,7 @@
 // struct PushConstantsDownrez {
 //     HashMap *hashMap;
 
+//     uint32_t *parentAdded;
 //     DownrezLayer *currLayer;
 //     DownrezLayer *nextLayer;
 // };
@@ -50,13 +51,26 @@ void main(uint32_t threadIdx: SV_DispatchThreadID) {
     uint32_t sourceIdx = pcdr.currLayer->list[threadIdx];
     uint3 radiance = pcdr.hashMap->radianceBuffer[sourceIdx];
     uint count = pcdr.hashMap->countBuffer[sourceIdx];
+    if (count == 0) return;
 
     uint destIdx = pcdr.hashMap->childAddressBuffer[sourceIdx];
+
+    // check if parent exists
+
+    //if not:
+
+    uint32_t wasParentAdded;
+    InterlockedCompareExchange(pcdr.parentAdded[destIdx], 0u, 1u, wasParentAdded);
+
+    if (wasParentAdded == 1u) {
+        // add parent
+    }
+
 
     InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].x, radiance.x);
     InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].y, radiance.y);
     InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].z, radiance.z);
     InterlockedAdd(pcdr.hashMap->countBuffer[destIdx], count);
 
-    
+    // add parent to next layer?
 }
