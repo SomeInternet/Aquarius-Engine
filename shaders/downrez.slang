@@ -47,6 +47,16 @@ void main(uint32_t threadIdx: SV_DispatchThreadID) {
     //IDK if this is the right one...
     AllMemoryBarrierWithGroupSync();
 
-    pcdr.currLayer->list[threadIdx];
+    uint32_t sourceIdx = pcdr.currLayer->list[threadIdx];
+    uint3 radiance = pcdr.hashMap->radianceBuffer[sourceIdx];
+    uint count = pcdr.hashMap->countBuffer[sourceIdx];
+
+    uint destIdx = pcdr.hashMap->childAddressBuffer[sourceIdx];
+
+    InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].x, radiance.x);
+    InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].y, radiance.y);
+    InterlockedAdd(pcdr.hashMap->radianceBuffer[destIdx].z, radiance.z);
+    InterlockedAdd(pcdr.hashMap->countBuffer[destIdx], count);
+
     
 }
