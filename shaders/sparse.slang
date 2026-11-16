@@ -120,11 +120,17 @@ void rayGeneration() {
         {
             if (++surfaceHitCount == 2)
             {
-                // second hit, cache to hashmap
-                uint address, checkSum;
-                insert(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
-                    NUM_HASH_MAP_ENTRIES, payload.sharcNormalWorld, payload.sharcPositionWorld, MIN_LOD,
-                    payload.albedo, address, checkSum);
+                // second hit, cache to hashmap and record the new finest slot for downrez
+                uint address;
+                HashMapResult result = populate(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
+                    pc.hashMap->childAddressBuffer, NUM_HASH_MAP_ENTRIES, payload.sharcNormalWorld, payload.sharcPositionWorld,
+                    payload.albedo, address);
+                if (result == HashMapResult::ENTRY_UNALLOCATED) {
+                    uint index;
+                    InterlockedAdd(pc.hashMap->finestLayer->size, 1, index);
+                    if (index < MAX_LAYER_SIZE)
+                        pc.hashMap->finestLayer->list[index] = address;
+                }
             }
 
             SharcHitData sharcHitData;

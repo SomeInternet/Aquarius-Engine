@@ -62,7 +62,8 @@ void main(uint32_t threadIdx: SV_DispatchThreadID) {
     uint32_t wasChildAdded;
     InterlockedCompareExchange(pcdr.childAdded[destIdx], 0u, 1u, wasChildAdded);
 
-    if (wasChildAdded > 0u) {
+    // Original value 0 means this thread won the flag and must append the parent.
+    if (wasChildAdded == 0u) {
         // add child to list
         int index;
         InterlockedAdd(pcdr.nextLayer->size, 1, index);

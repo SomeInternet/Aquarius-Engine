@@ -9,16 +9,18 @@
 #define MAX_SWAPCHAIN_SIZE 4
 #define HDR_IMAGES 1
 
+struct DownrezLayer {
+    uint32_t size;
+    uint32_t *list;
+};
+
 struct HashMap {
     uint32_t *checkSumBuffer;
     uint3 *radianceBuffer;
     uint32_t *countBuffer;
     uint32_t *childAddressBuffer;
-};
-
-struct DownrezLayer {
-    uint32_t size;
-    uint32_t *list;
+    // Header for the finest-LOD slot list. size is reset each frame; list holds hash slots.
+    DownrezLayer *finestLayer;
 };
 
 struct PushConstantsDownrez {
