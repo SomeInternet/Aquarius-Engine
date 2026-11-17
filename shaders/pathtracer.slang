@@ -47,7 +47,9 @@ void rayGeneration() {
     HitPayload payload = {};
     float3 cachedAlbedo = float3(0.f);
     bool hashMapQueried = false;
-    for (uint i = 0; i < pc.maxBounces; ++i) {
+    float3 dir = float3(0.f); // view dir of the first indirect hit
+
+    for (uint i = 0; i < 2; ++i) {
         depth = i;
         payload.seed = seed;
 
@@ -58,23 +60,31 @@ void rayGeneration() {
         seed = payload.seed;
 
         // Temp, visualize second-hit samples from hashmap queries
+        if (!i) dir = payload.rayDir;
+
         if (i && !hashMapQueried && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
             hashMapQueried = true;
             uint address;
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
+            bool found = false;
             for(int j = MIN_LOD; j < MAX_LOD; ++j) {
-                if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, payload.hitNor, hitPos,
-                j, cachedAlbedo) == HashMapResult::ENTRY_FOUND) {
-                    break; 
+                if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
+                j, cachedAlbedo, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
+                    found = true;
+                    break;
                 }
             }
-           
+            if (!found) cachedAlbedo = float3(0.f);
+
+            // Attenuate the cached radiance by the throughput of the first and second hits
+            cachedAlbedo *= throughput;
+            cachedAlbedo = select(isnan(cachedAlbedo), float3(0.f), cachedAlbedo);
         }
 
         // SHARC QUERY/RENDER stage integration
         // we not considering the first (direct) bounce, if cache hit we use cache and terminate
 #if SHARC_QUERY
-        if ((pc.flags & EngineStateFlags::SHARC) && hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
+        if (!hashMapQueried && (pc.flags & EngineStateFlags::SHARC) && hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
             float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, params.hashGridParameters), params.hashGridParameters);
             // cannot be shorter than voxel length
@@ -97,7 +107,7 @@ void rayGeneration() {
                 break;
             } 
         }
-        #endif
+#endif
 
         if (hitObject.IsHit()) accumulatedLight += throughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
 
@@ -109,6 +119,9 @@ void rayGeneration() {
             accumulatedLight += throughput * payload.throughput.rgb * misWeight;
             break;
         }
+
+        // Direct and first indirect light are counted above; the hashmap covers the rest of the path
+        if (hashMapQueried) break;
 
         //A pdf of 0 means we passed straight through an alpha-cut surface, so the throughput and pdf carry over
         if (payload.pdf > 0.f) {
@@ -145,8 +158,8 @@ void rayGeneration() {
     }
     */
 
-    //only output albedo stored by hash for testing
-    radianceImage[DispatchRaysIndex().xy] = float4(cachedAlbedo, 1.f);
+    // Direct + first indirect light, plus the attenuated hashmap radiance for the rest of the path
+    radianceImage[DispatchRaysIndex().xy] = float4(accumulatedLight + cachedAlbedo, 1.f);
 }
 
 [shader("closesthit")]

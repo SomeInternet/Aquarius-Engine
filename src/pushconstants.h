@@ -42,6 +42,7 @@ struct PushConstantsPathtracer {
 struct PushConstantsPost {
 	uint32_t outputImageIdx;
 	uint32_t swapRedBlue;
+	EngineStateFlags flags;
 };
 
 // SHaRC resolve. shaders/resolve.slang PushConstantsResolve must stay in this order:
@@ -72,7 +73,7 @@ struct PushDataSharc {
 };
 
 // Must match SHARC_TILE_SIZE in shaders/update.slang.
-constexpr uint32_t SHARC_UPDATE_TILE_SIZE = 10;
+constexpr uint32_t SHARC_UPDATE_TILE_SIZE = 5;
 
 struct PushConstantsResolve {
 	glm::vec3 cameraPosition;

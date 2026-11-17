@@ -219,6 +219,7 @@ private:
 	float _sharcSceneScale{ 50.f };
 	bool _sharcEnabled{ true };
 	bool _sharcHeatmap{ false };
+	bool _hashMapHeatMap{ false };
 	uint32_t _sharcAccumulationFrameNum{ 8 };
 	uint32_t _sharcStaleFrameNumMax{ 64 };
 

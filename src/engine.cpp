@@ -1311,6 +1311,7 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 
 	if (ImGui::Checkbox("SHaRC enabled", &_sharcEnabled)) _frameNum = 0;
 	if (ImGui::Checkbox("SHaRC bounce heatmap", &_sharcHeatmap)) _frameNum = 0;
+	if (ImGui::Checkbox("GPU hash map heat map", &_hashMapHeatMap)) _frameNum = 0;
 
 	int accumulationFrames = static_cast<int>(_sharcAccumulationFrameNum);
 	ImGui::SliderInt("SHaRC accumulation frames", &accumulationFrames, 1, 128);
@@ -1435,6 +1436,7 @@ void Engine::draw() {
 
 		vkCmdPipelineBarrier2(commandBuffer, &dependency);
 	}
+	_frameNum = 0;
 
 	// Previous frame's trace may still be touching these shared buffers
 	VkMemoryBarrier2 preClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
@@ -1489,6 +1491,7 @@ void Engine::draw() {
 	uint32_t flags = 0;
 	if (_sharcEnabled) flags |= SHARC;
 	if (_sharcHeatmap) flags |= SHARC_HEATMAP;
+	if (_hashMapHeatMap) flags |= EngineStateFlags::GPU_HASH_MAP_HEAT_MAP;
 	_pcpt.flags = static_cast<EngineStateFlags>(flags);
 
 	if (_sharcEnabled) {
@@ -1529,6 +1532,7 @@ void Engine::draw() {
 		// Storage writes map shader component 0 onto the format's first channel.
 		// For B8G8R8A8 that channel is blue, so the post shader swaps R and B.
 		pcp.swapRedBlue = _swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM ? 1 : 0;
+		pcp.flags = static_cast<EngineStateFlags>(flags);
 
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
 		VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
@@ -1693,7 +1697,7 @@ void Engine::init() {
 	_loaded = true;
 
 	//Load default scene
-	std::string path = "./models/cornellbox_closed.glb";
+	std::string path = "./models/cornellbox_canonical.glb";
 	loadScene(path);
 
 	createSharcBuffers();

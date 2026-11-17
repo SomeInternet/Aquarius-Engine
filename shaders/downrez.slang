@@ -14,7 +14,7 @@
 // If the parent is not already in the list, add it (could use a boolean buffer or something to check)
 
 #define BLOCK_SIZE 256
-#define MAX_LAYER_SIZE 32767
+#define MAX_LAYER_SIZE 1048575
 
 #include "hashmap.slang"
 

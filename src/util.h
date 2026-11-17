@@ -71,5 +71,5 @@ enum EngineStateFlags: uint32_t {
 	RAY_RECONSTRUCTION = 1 << 1,
 	SHARC = 1 << 2,
 	SHARC_HEATMAP = 1 << 3,
-	AA_JITTER = 1 << 2,
+	GPU_HASH_MAP_HEAT_MAP = 1 << 4
 };

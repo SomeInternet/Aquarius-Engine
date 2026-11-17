@@ -12,7 +12,7 @@
 #define MIN_LOD -4
 #define MAX_LOD 3
 #ifndef MAX_LAYER_SIZE
-#define MAX_LAYER_SIZE 32767
+#define MAX_LAYER_SIZE 1048575
 #endif
 #define DIR_QUANTIZATION_BITS 4
 #define SEARCH_LENGTH 100
@@ -56,16 +56,17 @@ inline uint64_t quantizePos(float3 pos, int lod) {
     return uint64_t(voxelPos[0]) << 32 | uint64_t(voxelPos[1]) << 16 | uint64_t(voxelPos[2]);
 }
 
-inline uint64_t quantize(float3 dir, float3 pos, int lod) {
+inline uint64_t quantize(float3 dir, float3 pos, int lod, bool heatMapDebug = false) {
      // Compute the quantized voxel
 
     // Layout would be (subject to change)
     //  DIRECTION (8 bits) | POSITION (48 bits) | lod (8 bits)
-    return (uint64_t(quantizeDir(dir)) << 56) | (quantizePos(pos, lod) << 8) | uint64_t(lod - MIN_LOD);
+    //Don't quantize dir if we're doing a heat map debug view (we just want to see the voxels)
+    return ((heatMapDebug) ? (uint64_t(0xff) << 56) : (uint64_t(quantizeDir(dir)) << 56)) | (quantizePos(pos, lod) << 8) | uint64_t(lod - MIN_LOD);
 }
 
-inline void hashVertex(float3 dir, float3 pos, int lod, inout uint32_t startAddress, inout uint32_t checkSum) {
-    uint64_t sK = quantize(dir, pos, lod);
+inline void hashVertex(float3 dir, float3 pos, int lod, inout uint32_t startAddress, inout uint32_t checkSum, bool heatMapDebug = false) {
+    uint64_t sK = quantize(dir, pos, lod, heatMapDebug);
 
     uint64_t hashed = hash(sK);
     startAddress = uint32_t(hashed >> 32);
@@ -76,12 +77,12 @@ inline void hashVertex(float3 dir, float3 pos, int lod, inout uint32_t startAddr
 
 HashMapResult insert(uint32_t *checkSums, uint3 *radiances, uint32_t *counts, 
     uint32_t hashMapSize, float3 dir, float3 pos, int lod, float3 radiance,
-    inout uint32_t finalAddress, inout uint32_t checkSum) {
+    inout uint32_t finalAddress, inout uint32_t checkSum, bool heatMapDebug = false) {
 
     radiance = select(isnan(radiance), 0.f, radiance);
 
     uint32_t startAddress;
-    hashVertex(dir, pos, lod, startAddress, checkSum);
+    hashVertex(dir, pos, lod, startAddress, checkSum, heatMapDebug);
 
     uint32_t mapValue;
     // check the hashmap entry, find the first non-collision
@@ -114,10 +115,10 @@ HashMapResult insert(uint32_t *checkSums, uint3 *radiances, uint32_t *counts,
 }
 
 HashMapResult allocate(uint32_t *checkSums, uint3 *radiances, uint32_t *counts, 
-    uint32_t hashMapSize, float3 dir, float3 pos, int lod, inout uint32_t finalAddress, inout uint32_t checkSum) {
+    uint32_t hashMapSize, float3 dir, float3 pos, int lod, inout uint32_t finalAddress, inout uint32_t checkSum, bool heatMapDebug) {
 
     uint32_t startAddress;
-    hashVertex(dir, pos, lod, startAddress, checkSum);
+    hashVertex(dir, pos, lod, startAddress, checkSum, heatMapDebug);
 
     uint32_t mapValue;
     // check the hashmap entry, find the first non-collision
@@ -146,17 +147,17 @@ HashMapResult allocate(uint32_t *checkSums, uint3 *radiances, uint32_t *counts,
 HashMapResult populate(uint32_t *checkSums, uint3 *radiances,
                        uint32_t *counts, uint32_t *childAddresses,
                        uint32_t hashMapSize, float3 dir, float3 pos, float3 radiance,
-                       inout uint32_t finestAddress) {
+                       inout uint32_t finestAddress, bool heatMapDebug = false) {
 
     uint32_t checkSum;
-    HashMapResult res = insert(checkSums, radiances, counts, hashMapSize, dir, pos, MIN_LOD, radiance, finestAddress, checkSum);
+    HashMapResult res = insert(checkSums, radiances, counts, hashMapSize, dir, pos, MIN_LOD, radiance, finestAddress, checkSum, heatMapDebug);
     if (res == HashMapResult::ENTRY_NOT_FOUND) return HashMapResult::ENTRY_NOT_FOUND;
     uint32_t finalAddress = finestAddress;
     for (int i = MIN_LOD + 1; i <= MAX_LOD; ++i) {
         uint32_t address;
 
         //"Allocate" child and link the parent
-        if (allocate(checkSums, radiances, counts, hashMapSize, dir, pos, i, address, checkSum) == HashMapResult::ENTRY_NOT_FOUND) return res;
+        if (allocate(checkSums, radiances, counts, hashMapSize, dir, pos, i, address, checkSum, heatMapDebug) == HashMapResult::ENTRY_NOT_FOUND) return res;
         childAddresses[finalAddress] = address;
         finalAddress = address;
     }
@@ -176,9 +177,9 @@ static const float3 hashHeatMap[8] = {
 
 HashMapResult query(uint32_t *checkSums, uint3 *radiances, uint32_t *counts, uint32_t hashMapSize, 
 float3 dir, float3 pos, int lod, 
-out float3 radiance) {
+out float3 radiance, bool heatMapDebug = false) {
     uint32_t startAddress, checkSum;
-    hashVertex(dir, pos, lod, startAddress, checkSum);
+    hashVertex(dir, pos, lod, startAddress, checkSum, heatMapDebug);
 
     uint32_t mapValue;
     uint32_t finalAddress = startAddress;
@@ -191,7 +192,7 @@ out float3 radiance) {
             // Found empty slot or existing entry. Break out of loop
             entry = SEARCH_LENGTH;
             //radiance = hashHeatMap[lod - MIN_LOD];
-            radiance = float3(radiances[finalAddress]) / (counts[finalAddress] * RADIANCE_CONVERSION_SCALE);
+            radiance = heatMapDebug ? hashHeatMap[lod - MIN_LOD] : float3(radiances[finalAddress]) / (counts[finalAddress] * RADIANCE_CONVERSION_SCALE);
         }
     }
 

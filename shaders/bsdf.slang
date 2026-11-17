@@ -169,6 +169,25 @@ inline bool sampleWi(float3 wo, PBR pbr, float r, float2 xi, out float3 wi) {
     return wi.z < 0.f;
 }
 
+inline bool sampleWiDiffuse(float3 wo, float2 xi, out float3 wi) {
+    if (wo.z < 0.f) return false;
+    wi = toHemisphereCosineWeighted(xi);
+    return true;
+}
+
+inline void evalDiffuse(float3 wo, float3 wi, float3 albedo, out float3 bsdf, out float pdf) {
+    //Cosine weighted sampling of a diffuse material
+
+    if (wo.z < 0.f) {
+        pdf = 0.f;
+        bsdf = float3(0.f);
+        return;
+    }
+
+    bsdf = wi.z * albedo / PI; // We pre-attenuate by the lambertian here
+    pdf = wi.z / PI;
+}
+
 //Based on the Khronos group's glTF spec: https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_materials_transmission/README.md
 //Currently this probably would cause a good amount of thread divergence, and variance too.
 inline void evalCookTorrance(float3 wo, float3 wi, PBR pbr, out float3 bsdf, out float pdf) {

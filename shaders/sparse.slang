@@ -10,6 +10,8 @@
 #include "sampling.slang"
 #include "hashmap.slang"
 
+#define SHARC_TILE_SIZE 5
+
 // SHARC
 // SHARC hash table
 
@@ -31,21 +33,10 @@ struct UpdateHitPayload
     uint sharcSurfaceValid;
 };
 
-[shader("raygeneration")]
-void rayGeneration() {
-    static const uint SHARC_TILE_SIZE = 10;
-    uint renderWidth;
-    uint renderHeight;
-    radianceImage.GetDimensions(renderWidth, renderHeight);
-    uint2 imageSize = uint2(renderWidth, renderHeight);
-
+inline uint2 pickSparsePixel(uint2 imageSize) {
     uint2 tileIndex = DispatchRaysIndex().xy;
     uint2 tileOrigin = tileIndex * SHARC_TILE_SIZE;
 
-    if (any(tileOrigin >= imageSize)) // origin of tile outside image
-        return;
-
-    // Account for partial tiles at right/bottom edges
     uint2 tileExtent = min(
         uint2(SHARC_TILE_SIZE, SHARC_TILE_SIZE),
         imageSize - tileOrigin);
@@ -61,11 +52,23 @@ void rayGeneration() {
         tileSample % tileExtent.x,
         tileSample / tileExtent.x);
 
-    uint2 pixel = tileOrigin + tileOffset; //  choose one pixel for 5x5 tile
+    return tileOrigin + tileOffset; //  choose one pixel for 5x5 tile
+}
 
-    seed = pcg2(pixel) ^ pcg(pc.totalFrames);
+[shader("raygeneration")]
+void rayGeneration() {
+    uint2 imageSize;
+    radianceImage.GetDimensions(imageSize.x, imageSize.y);
 
-    float2 samplePos = float2(pixel) + float2(rand(), rand()); // jitter pixel
+    // Account for partial tiles at right/bottom edges
+
+    //float2 samplePos = float2(pixel) + float2(rand(), rand()); // jitter pixel
+    float2 samplePos = pickSparsePixel(imageSize);
+
+    seed = pcg2(uint2(samplePos)) ^ pcg(pc.totalFrames);
+
+    if (any(samplePos >= imageSize)) // origin of tile outside image
+        return;
 
     RayDesc ray;
     {
@@ -92,6 +95,12 @@ void rayGeneration() {
 
     UpdateHitPayload payload = {};
     uint surfaceHitCount = 0;
+
+    // View dir and pos of the first indirect hit, plus the radiance gathered past it
+    float3 indirectHitDir = float3(0.f), indirectHitPos = float3(0.f);
+    float3 cacheThroughput = float3(1.f); // throughput past the second bounce (first indirect hit)
+    float3 cacheRadiance = float3(0.f);
+    float prevBsdfPdf = 0.f;
     for (uint i = 0; i < pc.maxBounces; ++i) {
         payload.seed = seed;
         payload.throughput = float3(0.f);
@@ -110,36 +119,36 @@ void rayGeneration() {
         {
             payload.throughput.b *= -1.f;
 
+            // Environment radiance arriving past the first indirect hit
+            if (surfaceHitCount >= 2) {
+                float misWeight = prevBsdfPdf > 0.f ? powerHeuristic(1, prevBsdfPdf, 1, payload.pdf) : 1.f;
+                cacheRadiance += cacheThroughput * payload.throughput * misWeight;
+            }
+
             SharcUpdateMiss( sharcParameters, sharcState, payload.throughput);
 
             break;
         }
 
         // Valid hit
-        float3 pos, dir;
         if (payload.sharcSurfaceValid != 0)
         {
-            if (++surfaceHitCount == 1) dir = payload.rayDir;
             if (++surfaceHitCount == 2)
             {
-                // second hit, cache to hashmap and record the new finest slot for downrez
-
                 // Store view dir and pos of first indirect hit
-                pos = payload.sharcPositionWorld;
-                
-                }
+                indirectHitDir = ray.Direction;
+                indirectHitPos = payload.sharcPositionWorld;
             }
-
-            if (i == 4) {
-                uint address;
-                HashMapResult result = populate(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
-                             pc.hashMap->childAddressBuffer, NUM_HASH_MAP_ENTRIES, dir, pos,
-                    payload.sharcLocalRadiance, address);
-                if (result == HashMapResult::ENTRY_UNALLOCATED) {
-                    uint index;
-                    InterlockedAdd(pc.hashMap->finestLayer->size, 1, index);
-                    if (index < MAX_LAYER_SIZE)
-                        pc.hashMap->finestLayer->list[index] = address;
+            else if (surfaceHitCount > 2)
+            {
+                // Radiance past the first indirect hit
+                if (payload.throughput.b < 0.f) {
+                    float3 emitted = float3(payload.throughput.rg, -payload.throughput.b);
+                    float misWeight = prevBsdfPdf > 0.f ? powerHeuristic(1, prevBsdfPdf, 1, payload.pdf) : 1.f;
+                    cacheRadiance += cacheThroughput * emitted * misWeight;
+                } else {
+                    cacheRadiance += cacheThroughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
+                }
             }
 
             SharcHitData sharcHitData;
@@ -181,9 +190,29 @@ void rayGeneration() {
 
         SharcSetThroughput(sharcState, segmentThroughput);
 
+        // Accumulate throughput past the second bounce (first indirect hit)
+        if (surfaceHitCount > 2)
+            cacheThroughput *= select(isnan(segmentThroughput), float3(0.f), segmentThroughput);
+        prevBsdfPdf = payload.pdf;
+
         ray.Origin = payload.rayOrigin;
         ray.Direction = payload.rayDir;
-        
+
+    }
+
+    // Path terminus: cache the radiance into the view dir and pos of the first indirect hit,
+    // and record the new finest slot for downrez
+    if (surfaceHitCount >= 2) {
+        uint address;
+        HashMapResult result = populate(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
+                                        pc.hashMap->childAddressBuffer, NUM_HASH_MAP_ENTRIES, indirectHitDir, indirectHitPos,
+                                        cacheRadiance, address, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP);
+        if (result == HashMapResult::ENTRY_UNALLOCATED) {
+            uint index;
+            InterlockedAdd(pc.hashMap->finestLayer->size, 1, index);
+            if (index < MAX_LAYER_SIZE)
+                pc.hashMap->finestLayer->list[index] = address;
+        }
     }
 }
 
