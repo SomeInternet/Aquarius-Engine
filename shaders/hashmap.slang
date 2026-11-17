@@ -142,7 +142,7 @@ HashMapResult allocate(uint32_t *checkSums, uint3 *radiances, uint32_t *counts,
 }
 
 //Populate is like insert, but allocates all descendant voxels while inserting the child at the finest LOD.
-//finestAddress stays the MIN_LOD slot; the loop walks the coarser parents separately.
+//finestAddress stays the MIN_LOD slot; the loop walks the coarser children separately.
 HashMapResult populate(uint32_t *checkSums, uint3 *radiances,
                        uint32_t *counts, uint32_t *childAddresses,
                        uint32_t hashMapSize, float3 dir, float3 pos, float3 radiance,
@@ -163,6 +163,17 @@ HashMapResult populate(uint32_t *checkSums, uint3 *radiances,
     return res;
 }
 
+static const float3 hashHeatMap[8] = {
+    float3(1.0, 1.0, 1.0),  // white
+    float3(1.0, 0.0, 0.0), // red
+    float3(1.0, 0.5, 0.0), // orange
+    float3(1.0, 1.0, 0.0), // yellow
+    float3(0.0, 1.0, 0.0), // green
+    float3(0.0, 1.0, 1.0), // cyan
+    float3(0.0, 0.0, 1.0), // blue
+    float3(0.5, 0.0, 1.0), // purple
+};
+
 HashMapResult query(uint32_t *checkSums, uint3 *radiances, uint32_t *counts, uint32_t hashMapSize, 
 float3 dir, float3 pos, int lod, 
 out float3 radiance) {
@@ -179,7 +190,8 @@ out float3 radiance) {
         if (mapValue == HASHMAP_UNALLOCATED || mapValue == checkSum) {
             // Found empty slot or existing entry. Break out of loop
             entry = SEARCH_LENGTH;
-            radiance = float3(radiances[finalAddress]) / (counts[finalAddress] * RADIANCE_CONVERSION_SCALE);
+            radiance = hashHeatMap[lod - MIN_LOD];
+            //radiance = float3(radiances[finalAddress]) / (counts[finalAddress] * RADIANCE_CONVERSION_SCALE);
         }
     }
 

@@ -1031,7 +1031,7 @@ void Engine::downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap) {
 		hashmap.childAdded.buffer,
 		hashmap.downrezLists[0].buffer,
 		hashmap.downrezLists[1].buffer,
-		hashmap.downrezLayerBuffers[0].buffer,
+		hashmap.downrezLayerBuffers[0].buffer,ash
 		hashmap.downrezLayerBuffers[1].buffer,
 	};
 

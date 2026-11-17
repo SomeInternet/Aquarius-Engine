@@ -54,8 +54,8 @@ struct HashMap {
 		};
 
 		downrezLayerBuffers = {
-			allocator.uploadBuffer(&downrezLayers[0], sizeof(DownrezLayer), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU),
-			allocator.uploadBuffer(&downrezLayers[1], sizeof(DownrezLayer), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU)
+			allocator.uploadBuffer(&downrezLayers[0], sizeof(DownrezLayer), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY),
+			allocator.uploadBuffer(&downrezLayers[1], sizeof(DownrezLayer), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY)
 		};
 
 		HashMapUniformBuffer hashMapUniforms{
