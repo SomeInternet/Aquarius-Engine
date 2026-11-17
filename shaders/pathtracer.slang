@@ -8,6 +8,10 @@
 #include "sampling.slang"
 #include "bindings.slang"
 #include "hashmap.slang"
+
+[vk::binding(8, 1)]
+RWTexture2D<float4> lodImage;
+
 // SHARC 
 
 [shader("raygeneration")]
@@ -46,6 +50,8 @@ void rayGeneration() {
 
     HitPayload payload = {};
     float3 cachedAlbedo = float3(0.f);
+    // Black: this pixel never queried. Magenta: every LOD missed.
+    float3 lodColor = float3(0.f);
     bool hashMapQueried = false;
     for (uint i = 0; i < pc.maxBounces; ++i) {
         depth = i;
@@ -60,15 +66,15 @@ void rayGeneration() {
         // Temp, visualize second-hit samples from hashmap queries
         if (i && !hashMapQueried && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
             hashMapQueried = true;
-            uint address;
+            lodColor = float3(1.f, 0.f, 1.f);
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
             for(int j = MIN_LOD; j < MAX_LOD; ++j) {
                 if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, payload.hitNor, hitPos,
                 j, cachedAlbedo) == HashMapResult::ENTRY_FOUND) {
-                    break; 
+                    lodColor = hashHeatMap[j - MIN_LOD];
+                    break;
                 }
             }
-           
         }
 
         // SHARC QUERY/RENDER stage integration
@@ -147,6 +153,7 @@ void rayGeneration() {
 
     //only output albedo stored by hash for testing
     radianceImage[DispatchRaysIndex().xy] = float4(cachedAlbedo, 1.f);
+    lodImage[DispatchRaysIndex().xy] = float4(lodColor, 1.f);
 }
 
 [shader("closesthit")]

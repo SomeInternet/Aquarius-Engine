@@ -381,12 +381,13 @@ void Engine::createDLSSImages() {
 	_specHitDistImage = _allocator.createImage(extent, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_specHitDistImageInfo);
 	_dlssOutputImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_dlssOutputImageInfo);
 	_orcaAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_orcaAlbedoImageInfo);
+	_lodImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_lodImageInfo);
 	//TODO: Create additional images for DLSS (might want too look into the depth of field guide)
 
 	//The shaders write these as storage images, so keep them in GENERAL
 	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
 		for (VkImage image : { _diffuseAlbedoImage.image, _specularAlbedoImage.image, _normalRoughnessImage.image, _viewDepthImage.image,
-			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image }) {
+			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image, _lodImage.image }) {
 			util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 		}
 		});
@@ -401,6 +402,7 @@ void Engine::destroyDLSSImages() {
 	_allocator.destroyImage(_specHitDistImage);
 	_allocator.destroyImage(_dlssOutputImage);
 	_allocator.destroyImage(_orcaAlbedoImage);
+	_allocator.destroyImage(_lodImage);
 	//_allocator.destroyImage(_postInputImage);
 }
 
@@ -413,6 +415,7 @@ void Engine::initDLSSImageDescriptors() {
 	writeImageDescriptor(6, _specHitDistImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(7, _dlssOutputImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(8, _orcaAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+	writeImageDescriptor(9, _lodImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	_allocator.flush(_imageHeap);
 }
 
@@ -692,6 +695,7 @@ void Engine::initPipelinePathtracer() {
 		heapMapping(5, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 6 * imageStride, 0), //Specular hit distance
 		heapMapping(6, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 7 * imageStride, 0), //DLSS output
 		heapMapping(7, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 8 * imageStride, 0), //ORCA albedo
+		heapMapping(8, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 9 * imageStride, 0), //Hashmap LOD
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -1280,7 +1284,7 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
 	//Debug view to make sure the DLSS/GBuffer images are appearing properly
-	std::vector<const char *> debugViewOptions = {"Pathtraced", "Diffuse Albedo", "Specular Albedo", "Normals", "Depth", "ORCA Albedo"};
+	std::vector<const char *> debugViewOptions = {"Pathtraced", "Diffuse Albedo", "Specular Albedo", "Normals", "Depth", "ORCA Albedo", "Hash LOD"};
 	const char *selected = debugViewOptions[static_cast<int>(_debugView)];
 
 	if (ImGui::BeginCombo("Debug view", selected)) {
@@ -1546,6 +1550,7 @@ void Engine::draw() {
 		case EngineDebugView::NORMALS: debugImage = &_normalRoughnessImage; break;
 		case EngineDebugView::DEPTH: debugImage = &_viewDepthImage; break;
 		case EngineDebugView::ORCA_ALBEDO: debugImage = &_orcaAlbedoImage; break;
+		case EngineDebugView::HASH_LOD: debugImage = &_lodImage; break;
 		default: break;
 		}
 
@@ -1693,7 +1698,7 @@ void Engine::init() {
 	_loaded = true;
 
 	//Load default scene
-	std::string path = "./models/cornellbox_closed.glb";
+	std::string path = "./models/cornellbox_anims.glb";
 	loadScene(path);
 
 	createSharcBuffers();

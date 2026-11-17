@@ -71,7 +71,7 @@ struct NVSDK_NGX_Parameter;
 struct NVSDK_NGX_Handle;
 
 enum EngineDebugView : uint8_t {
-	PATHTRACED, DIFFUSE_ALBEDO, SPECULAR_ALBEDO, NORMALS, DEPTH, ORCA_ALBEDO
+	PATHTRACED, DIFFUSE_ALBEDO, SPECULAR_ALBEDO, NORMALS, DEPTH, ORCA_ALBEDO, HASH_LOD
 };
 
 class Engine {
@@ -183,6 +183,7 @@ private:
 	AllocatedImage _specHitDistImage;
 	AllocatedImage _dlssOutputImage;
 	AllocatedImage _orcaAlbedoImage;
+	AllocatedImage _lodImage;
 	AllocatedImage _postInputImage;
 
 	VkImageViewCreateInfo _diffuseAlbedoImageInfo{};
@@ -193,6 +194,7 @@ private:
 	VkImageViewCreateInfo _specHitDistImageInfo{};
 	VkImageViewCreateInfo _dlssOutputImageInfo{};
 	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
+	VkImageViewCreateInfo _lodImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 
 	//GPU hash maps
