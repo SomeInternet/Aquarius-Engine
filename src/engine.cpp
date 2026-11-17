@@ -18,6 +18,7 @@
 #include "loader.h"
 #include "pushconstants.h"
 #include "aliastable.h"
+#include "shared_constants.h"
 
 static_assert(sizeof(glm::vec3) == 12, "SHaRC push constants assume a packed vec3");
 static_assert(sizeof(SharcConfig) == 16);
@@ -1062,7 +1063,7 @@ void Engine::downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap) {
 
 	// Layer 0 holds the finest LOD. Ping-pong until those voxels have been folded up to MAX_LOD.
 	uint32_t curr = 0;
-	for (int lod = HASHMAP_MIN_LOD; lod < HASHMAP_MAX_LOD; ++lod) {
+	for (int lod = MIN_LOD; lod < MAX_LOD; ++lod) {
 		const uint32_t next = curr ^ 1u;
 
 		barrier(
@@ -1094,7 +1095,7 @@ void Engine::downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap) {
 		_dispatchTable.cmdPushDataEXT(commandBuffer, &pushData);
 
 		// The layer length lives on the GPU, so launch the full list and let the shader discard the tail.
-		const uint32_t groups = (static_cast<uint32_t>(LIST_SIZE) + DOWNREZ_BLOCK_SIZE - 1) / DOWNREZ_BLOCK_SIZE;
+		const uint32_t groups = (static_cast<uint32_t>(MAX_LAYER_SIZE) + BLOCK_SIZE - 1) / BLOCK_SIZE;
 		vkCmdDispatch(commandBuffer, groups, 1, 1);
 
 		curr = next;
@@ -1494,6 +1495,7 @@ void Engine::draw() {
 	if (_hashMapHeatMap) flags |= EngineStateFlags::GPU_HASH_MAP_HEAT_MAP;
 	_pcpt.flags = static_cast<EngineStateFlags>(flags);
 
+	// BUILD THE CACHE
 	if (_sharcEnabled) {
 		updateSharc(commandBuffer);
 		downrezHashMap(commandBuffer, hashMap);
@@ -1514,7 +1516,7 @@ void Engine::draw() {
 	pushDataPt.offset = 0;
 	pushDataPt.data = { &pushPt, sizeof(pushPt)};
 	
-	//Sparse pass
+	// Main path tracer (one raygen invok pp)
 	_dispatchTable.cmdPushDataEXT(commandBuffer, &pushDataPt);
 	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_rayGenerationRegion, &_missRegion, &_hitRegion, &_callRegion, _renderExtent.width, _renderExtent.height, 1);
 

@@ -13,10 +13,8 @@
 // For each thread, atomically add its radiance and its count to the hash map entry for its parent
 // If the parent is not already in the list, add it (could use a boolean buffer or something to check)
 
-#define BLOCK_SIZE 256
-#define MAX_LAYER_SIZE 1048575
-
 #include "hashmap.slang"
+#include "../src/shared_constants.h"
 
 // struct DownrezLayer {
 //     uint32_t size;

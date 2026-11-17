@@ -1,4 +1,5 @@
 #include "util.slang"
+#include "../src/shared_constants.h"
 
 // RWStructuredBuffer<uint32_t> hashMapCheckSums
 // RWStructuredBuffer<float> hashMapValues
@@ -7,18 +8,6 @@
 // RWStructuredBuffer<uint32_t> hashMapCounts
 
 //Data structures needed to link finer voxels to coarser voxels
-
-#define HASHMAP_UNALLOCATED 0xffffffffu
-#define MIN_LOD -4
-#define MAX_LOD 3
-#ifndef MAX_LAYER_SIZE
-#define MAX_LAYER_SIZE 1048575
-#endif
-#define DIR_QUANTIZATION_BITS 4
-#define SEARCH_LENGTH 100
-#define NUM_HASH_MAP_ENTRIES 1036800
-
-#define RADIANCE_CONVERSION_SCALE 100
 
 enum HashMapResult {
     ENTRY_UNALLOCATED, ENTRY_FOUND, ENTRY_NOT_FOUND,

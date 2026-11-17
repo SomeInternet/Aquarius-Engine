@@ -1,14 +1,6 @@
 #pragma once
 #include "allocator.h"
-
-constexpr int NUM_HASH_MAP_ENTRIES = 1036800; //1920 * 1080 * 6 (LODs) / 16
-constexpr int LIST_SIZE = 1048575;
-
-// Match MIN_LOD, MAX_LOD, and BLOCK_SIZE in shaders/hashmap.slang and shaders/downrez.slang.
-// Each downrez dispatch folds one level into the next, stopping at the coarsest.
-constexpr int HASHMAP_MIN_LOD = -4;
-constexpr int HASHMAP_MAX_LOD = 3;
-constexpr uint32_t DOWNREZ_BLOCK_SIZE = 256;
+#include "shared_constants.h"
 
 struct DownrezLayer {
 	uint32_t size = 0;
@@ -44,8 +36,8 @@ struct HashMap {
 		childAdded(allocator.createBuffer(numEntries * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY, false))
 	{
 		downrezLists = {
-			allocator.createBuffer(sizeof(uint32_t) * LIST_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY),
-			allocator.createBuffer(sizeof(uint32_t) * LIST_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY)
+			allocator.createBuffer(sizeof(uint32_t) * MAX_LAYER_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY),
+			allocator.createBuffer(sizeof(uint32_t) * MAX_LAYER_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY)
 		};
 
 		downrezLayers = {
