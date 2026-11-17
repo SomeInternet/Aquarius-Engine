@@ -62,7 +62,7 @@ void rayGeneration() {
             hashMapQueried = true;
             uint address;
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-            for(int j = MAX_LOD; j >= MIN_LOD; j-=2) {
+            for(int j = MIN_LOD; j < MAX_LOD; ++j) {
                 if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, payload.hitNor, hitPos,
                 j, cachedAlbedo) == HashMapResult::ENTRY_FOUND) {
                     break; 

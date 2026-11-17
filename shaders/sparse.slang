@@ -33,7 +33,7 @@ struct UpdateHitPayload
 
 [shader("raygeneration")]
 void rayGeneration() {
-    static const uint SHARC_TILE_SIZE = 5;
+    static const uint SHARC_TILE_SIZE = 10;
     uint renderWidth;
     uint renderHeight;
     radianceImage.GetDimensions(renderWidth, renderHeight);
@@ -116,21 +116,30 @@ void rayGeneration() {
         }
 
         // Valid hit
+        float3 pos, dir;
         if (payload.sharcSurfaceValid != 0)
         {
+            if (++surfaceHitCount == 1) dir = payload.rayDir;
             if (++surfaceHitCount == 2)
             {
                 // second hit, cache to hashmap and record the new finest slot for downrez
+
+                // Store view dir and pos of first indirect hit
+                pos = payload.sharcPositionWorld;
+                
+                }
+            }
+
+            if (i == 4) {
                 uint address;
                 HashMapResult result = populate(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
-                    pc.hashMap->childAddressBuffer, NUM_HASH_MAP_ENTRIES, payload.sharcNormalWorld, payload.sharcPositionWorld,
-                    payload.albedo, address);
+                             pc.hashMap->childAddressBuffer, NUM_HASH_MAP_ENTRIES, dir, pos,
+                    payload.sharcLocalRadiance, address);
                 if (result == HashMapResult::ENTRY_UNALLOCATED) {
                     uint index;
                     InterlockedAdd(pc.hashMap->finestLayer->size, 1, index);
                     if (index < MAX_LAYER_SIZE)
                         pc.hashMap->finestLayer->list[index] = address;
-                }
             }
 
             SharcHitData sharcHitData;

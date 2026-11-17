@@ -190,12 +190,10 @@ out float3 radiance) {
         if (mapValue == HASHMAP_UNALLOCATED || mapValue == checkSum) {
             // Found empty slot or existing entry. Break out of loop
             entry = SEARCH_LENGTH;
-            radiance = hashHeatMap[lod - MIN_LOD];
-            //radiance = float3(radiances[finalAddress]) / (counts[finalAddress] * RADIANCE_CONVERSION_SCALE);
+            //radiance = hashHeatMap[lod - MIN_LOD];
+            radiance = float3(radiances[finalAddress]) / (counts[finalAddress] * RADIANCE_CONVERSION_SCALE);
         }
     }
 
-    if (mapValue == HASHMAP_UNALLOCATED) return HashMapResult::ENTRY_UNALLOCATED;
-    else if (mapValue == checkSum) return HashMapResult::ENTRY_FOUND;
-    return HashMapResult::ENTRY_NOT_FOUND;
+    return (mapValue == checkSum) ? HashMapResult::ENTRY_FOUND : HashMapResult::ENTRY_NOT_FOUND;
 }
