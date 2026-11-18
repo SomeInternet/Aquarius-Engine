@@ -159,6 +159,8 @@ void rayGeneration() {
 
             // Update ORCA even if SHARC doesn't, since ORCA needs to accumulate radiance past the first indirect hit.
             updateSharc = SharcUpdateHit(sharcParameters, sharcState, sharcHitData, payload.sharcLocalRadiance, rand());
+            // if (!SharcUpdateHit(sharcParameters, sharcState, sharcHitData, payload.sharcLocalRadiance, rand()))
+            //     break;
         }
 
         // No more path
@@ -191,7 +193,8 @@ void rayGeneration() {
 
     // Path terminus: cache the radiance into the view dir and pos of the first indirect hit,
     // and record the new finest slot for downrez
-    if (surfaceHitCount >= 2 && length(orcaRadiance) > 0.f) {
+    // if (surfaceHitCount >= 2 && length(orcaRadiance) > 0.f)
+    if (surfaceHitCount >= 2) {
         uint address;
         HashMapResult result = populate(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
                                         pc.hashMap->childAddressBuffer, NUM_HASH_MAP_ENTRIES, indirectHitDir, indirectHitPos,

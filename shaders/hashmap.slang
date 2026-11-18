@@ -19,6 +19,7 @@
 #define NUM_HASH_MAP_ENTRIES 2073600
 
 #define RADIANCE_CONVERSION_SCALE 100
+#define MAX_SAMPLE_RADIANCE 327.f
 
 enum HashMapResult {
     ENTRY_UNALLOCATED, ENTRY_FOUND, ENTRY_NOT_FOUND,
@@ -96,7 +97,8 @@ HashMapResult insert(uint32_t *checkSums, uint3 *radiances, uint32_t *counts,
         // Atomically update value, counter
         InterlockedCompareExchange(checkSums[finalAddress], HASHMAP_UNALLOCATED, checkSum, mapValue);
         if (mapValue == HASHMAP_UNALLOCATED || mapValue == checkSum) {
-            uint3 radianceInt = round(clamp(radiance * RADIANCE_CONVERSION_SCALE, float3(0.f), float3(32767.f)));
+            // uint3 radianceInt = round(clamp(radiance * RADIANCE_CONVERSION_SCALE, float3(0.f), float3(32767.f)));
+            uint3 radianceInt = round(clamp(radiance, float3(0.f), float3(MAX_SAMPLE_RADIANCE)) * RADIANCE_CONVERSION_SCALE);
 
             // Prone to overflow, we should examine if it's an issue and address it potentially
             if (radianceInt.x > 0) InterlockedAdd(radiances[finalAddress].x, radianceInt.x);
