@@ -139,7 +139,7 @@ void rayGeneration() {
                 indirectHitDir = ray.Direction;
                 indirectHitPos = payload.sharcPositionWorld;
             }
-            else if (surfaceHitCount > 2)
+            else if (surfaceHitCount >= 2)
             {
                 // Radiance past the first indirect hit
                 if (payload.throughput.b < 0.f) {
@@ -191,7 +191,7 @@ void rayGeneration() {
         SharcSetThroughput(sharcState, segmentThroughput);
 
         // Accumulate throughput past the second bounce (first indirect hit)
-        if (surfaceHitCount > 2)
+        if (surfaceHitCount >= 2)
             cacheThroughput *= select(isnan(segmentThroughput), float3(0.f), segmentThroughput);
         prevBsdfPdf = payload.pdf;
 
