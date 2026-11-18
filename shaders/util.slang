@@ -137,6 +137,7 @@ struct PushConstantsPathtracer {
     float focusDist = 1.f;
 
     EngineStateFlags flags;
+    int heatMapLod;
 };
 
 struct HitPayload {

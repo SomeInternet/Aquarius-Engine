@@ -1310,8 +1310,10 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	_pcpt.lensRadius = lensRadius;
 
 	if (ImGui::Checkbox("SHaRC enabled", &_sharcEnabled)) _frameNum = 0;
-	if (ImGui::Checkbox("SHaRC bounce heatmap", &_sharcHeatmap)) _frameNum = 0;
+	if (ImGui::Checkbox("SHaRC bounce heat map", &_sharcHeatmap)) _frameNum = 0;
 	if (ImGui::Checkbox("GPU hash map heat map", &_hashMapHeatMap)) _frameNum = 0;
+	if (ImGui::SliderInt("Heat map LOD level", &_pcpt.heatMapLod, HASHMAP_MIN_LOD, HASHMAP_MAX_LOD)) _frameNum = 0;
+
 
 	int accumulationFrames = static_cast<int>(_sharcAccumulationFrameNum);
 	ImGui::SliderInt("SHaRC accumulation frames", &accumulationFrames, 1, 128);

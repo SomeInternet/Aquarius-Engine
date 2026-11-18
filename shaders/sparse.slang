@@ -81,7 +81,7 @@ void rayGeneration() {
     ray.TMin = EPSILON; // Avoid self-intersection
     ray.TMax = INFINITY;
 
-    // All sparse paths populate ORCA; ~60%  update SHaRC
+    // All sparse paths populate ORCA; ~67%  update SHaRC
     bool updateSharc = rand() < (2.f / 3.f);
 
     // SHARC init
