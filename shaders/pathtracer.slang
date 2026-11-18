@@ -92,7 +92,7 @@ void rayGeneration() {
             if (!found) cachedRadiance = float3(0.f);
 
             // Attenuate the cached radiance by the throughput of the first and second hits
-            if (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags == 0) {
+            if ((EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) == 0) {
                 cachedRadiance *= throughput;
                 cachedRadiance = select(isnan(cachedRadiance), float3(0.f), cachedRadiance);
             }

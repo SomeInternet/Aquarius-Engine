@@ -91,8 +91,6 @@ void rayGeneration() {
     SharcState sharcState;
     SharcInit(sharcState);
 
-    float3 rrPathThroughput = float3(1.f);
-
     UpdateHitPayload payload = {};
     uint surfaceHitCount = 0;
 
@@ -173,20 +171,6 @@ void rayGeneration() {
 
         // Single segment throughput
         float3 segmentThroughput = payload.throughput / payload.pdf;
-        rrPathThroughput *= segmentThroughput;
-
-        // RR
-        if (i > 2)
-        {
-            float q = clamp(max(rrPathThroughput.x, max(rrPathThroughput.y, rrPathThroughput.z)), 0.05f, 1.f);
-
-            if (rand() >= q)
-                break;
-
-            // Include rr to throughput
-            segmentThroughput /= q;
-            rrPathThroughput /= q;
-        }
 
         SharcSetThroughput(sharcState, segmentThroughput);
 
