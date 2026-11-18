@@ -10,7 +10,7 @@
 #include "sampling.slang"
 #include "hashmap.slang"
 
-#define SHARC_TILE_SIZE 5
+#define SHARC_TILE_SIZE 4
 
 // SHARC
 // SHARC hash table

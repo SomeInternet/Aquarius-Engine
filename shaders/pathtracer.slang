@@ -45,7 +45,7 @@ void rayGeneration() {
     #endif
 
     HitPayload payload = {};
-    float3 cachedAlbedo = float3(0.f);
+    float3 cachedRadiance = float3(0.f);
     bool hashMapQueried = false;
     float3 dir = float3(0.f); // view dir of the first indirect hit
 
@@ -59,6 +59,18 @@ void rayGeneration() {
         HitObject::Invoke<HitPayload>(tlas, hitObject, payload);
         seed = payload.seed;
 
+        bool found = false;
+        if (!i && hitObject.IsHit() && (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags)) {
+            
+            float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
+            if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
+                MIN_LOD, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
+                found = true;
+            }
+        }
+        if (!found) cachedRadiance = float3(0.f);
+        if (found) break;
+
         // Temp, visualize second-hit samples from hashmap queries
         if (!i) dir = payload.rayDir;
 
@@ -66,19 +78,21 @@ void rayGeneration() {
             hashMapQueried = true;
             uint address;
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-            bool found = false;
+            found = false;
             for(int j = MIN_LOD; j < MAX_LOD; ++j) {
                 if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
-                j, cachedAlbedo, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
+                j, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
                     found = true;
                     break;
                 }
             }
-            if (!found) cachedAlbedo = float3(0.f);
+            if (!found) cachedRadiance = float3(0.f);
 
             // Attenuate the cached radiance by the throughput of the first and second hits
-            cachedAlbedo *= throughput;
-            cachedAlbedo = select(isnan(cachedAlbedo), float3(0.f), cachedAlbedo);
+            if (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags == 0) {
+                cachedRadiance *= throughput;
+                cachedRadiance = select(isnan(cachedRadiance), float3(0.f), cachedRadiance);
+            }
         }
 
         // SHARC QUERY/RENDER stage integration
@@ -159,7 +173,8 @@ void rayGeneration() {
     */
 
     // Direct + first indirect light, plus the attenuated hashmap radiance for the rest of the path
-    radianceImage[DispatchRaysIndex().xy] = float4(accumulatedLight + cachedAlbedo, 1.f);
+    if (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) radianceImage[DispatchRaysIndex().xy] = float4(cachedRadiance, 1.f);
+    else radianceImage[DispatchRaysIndex().xy] = float4(accumulatedLight + cachedRadiance, 1.f);
 }
 
 [shader("closesthit")]

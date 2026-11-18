@@ -73,7 +73,7 @@ struct PushDataSharc {
 };
 
 // Must match SHARC_TILE_SIZE in shaders/update.slang.
-constexpr uint32_t SHARC_UPDATE_TILE_SIZE = 5;
+constexpr uint32_t SHARC_UPDATE_TILE_SIZE = 4;
 
 struct PushConstantsResolve {
 	glm::vec3 cameraPosition;
