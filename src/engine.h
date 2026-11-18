@@ -55,8 +55,9 @@ constexpr int FRAMES_IN_FLIGHT = 3;
 //6: specular hit distance
 //7: dlss output
 //8: ORCA albedo
-//9: TODO: post
-constexpr int ENGINE_IMAGES = 10;
+//9: hashmap LOD that answered the query
+//10: position voxel id at one LOD
+constexpr int ENGINE_IMAGES = 11;
 constexpr int HDR_IMAGES = 1;
 constexpr int N_IMAGE_DESCRIPTORS = 4096;
 constexpr int N_SAMPLER_DESCRIPTORS = 256;
@@ -71,7 +72,7 @@ struct NVSDK_NGX_Parameter;
 struct NVSDK_NGX_Handle;
 
 enum EngineDebugView : uint8_t {
-	PATHTRACED, DIFFUSE_ALBEDO, SPECULAR_ALBEDO, NORMALS, DEPTH, ORCA_ALBEDO, HASH_LOD
+	PATHTRACED, DIFFUSE_ALBEDO, SPECULAR_ALBEDO, NORMALS, DEPTH, ORCA_ALBEDO, HASH_LOD, VOXEL_ID
 };
 
 class Engine {
@@ -184,6 +185,7 @@ private:
 	AllocatedImage _dlssOutputImage;
 	AllocatedImage _orcaAlbedoImage;
 	AllocatedImage _lodImage;
+	AllocatedImage _voxelIdImage;
 	AllocatedImage _postInputImage;
 
 	VkImageViewCreateInfo _diffuseAlbedoImageInfo{};
@@ -195,6 +197,7 @@ private:
 	VkImageViewCreateInfo _dlssOutputImageInfo{};
 	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
 	VkImageViewCreateInfo _lodImageInfo{};
+	VkImageViewCreateInfo _voxelIdImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 
 	//GPU hash maps

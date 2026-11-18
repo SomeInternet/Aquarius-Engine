@@ -12,6 +12,9 @@
 [vk::binding(8, 1)]
 RWTexture2D<float4> lodImage;
 
+[vk::binding(9, 1)]
+RWTexture2D<float4> voxelIdImage;
+
 // SHARC 
 
 [shader("raygeneration")]
@@ -52,7 +55,10 @@ void rayGeneration() {
     float3 cachedAlbedo = float3(0.f);
     // Black: this pixel never queried. Magenta: every LOD missed.
     float3 lodColor = float3(0.f);
+    // Black: the camera ray never hit a surface.
+    float3 voxelColor = float3(0.f);
     bool hashMapQueried = false;
+    bool voxelWritten = false;
     for (uint i = 0; i < pc.maxBounces; ++i) {
         depth = i;
         payload.seed = seed;
@@ -62,6 +68,13 @@ void rayGeneration() {
         ReorderThread(hitObject);
         HitObject::Invoke<HitPayload>(tlas, hitObject, payload);
         seed = payload.seed;
+
+        // Visible surface, quantized at one LOD. Ignores the cache.
+        if (!voxelWritten && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
+            voxelWritten = true;
+            float3 voxelPos = ray.Origin + ray.Direction * payload.hitLen;
+            voxelColor = voxelIdColor(voxelPos, pc.voxelLod);
+        }
 
         // Temp, visualize second-hit samples from hashmap queries
         if (i && !hashMapQueried && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
@@ -154,6 +167,7 @@ void rayGeneration() {
     //only output albedo stored by hash for testing
     radianceImage[DispatchRaysIndex().xy] = float4(cachedAlbedo, 1.f);
     lodImage[DispatchRaysIndex().xy] = float4(lodColor, 1.f);
+    voxelIdImage[DispatchRaysIndex().xy] = float4(voxelColor, 1.f);
 }
 
 [shader("closesthit")]

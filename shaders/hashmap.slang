@@ -56,6 +56,15 @@ inline uint64_t quantizePos(float3 pos, int lod) {
     return uint64_t(voxelPos[0]) << 32 | uint64_t(voxelPos[1]) << 16 | uint64_t(voxelPos[2]);
 }
 
+// Stable color for one position voxel. Black is reserved for rays that miss.
+inline float3 voxelIdColor(float3 pos, int lod) {
+    uint64_t mixed = hash(quantizePos(pos, lod));
+    uint r = 64u + uint((mixed >> 16) & 191u);
+    uint g = 64u + uint((mixed >> 8) & 191u);
+    uint b = 64u + uint(mixed & 191u);
+    return float3(r, g, b) / 255.f;
+}
+
 inline uint64_t quantize(float3 dir, float3 pos, int lod) {
      // Compute the quantized voxel
 

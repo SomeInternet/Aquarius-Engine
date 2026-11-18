@@ -5,7 +5,7 @@
 #define PI 3.1415926535897932384626433832795028841971f
 #define INFINITY 0x1.fffffep+127f
 
-#define ENGINE_IMAGES 10
+#define ENGINE_IMAGES 11
 #define MAX_SWAPCHAIN_SIZE 4
 #define HDR_IMAGES 1
 
@@ -138,6 +138,7 @@ struct PushConstantsPathtracer {
     float focusDist = 1.f;
 
     EngineStateFlags flags;
+    int voxelLod;
 };
 
 struct HitPayload {

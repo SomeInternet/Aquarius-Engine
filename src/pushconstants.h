@@ -37,6 +37,7 @@ struct PushConstantsPathtracer {
 	float focusDist{ 1.f };
 
 	EngineStateFlags flags{ 0 };
+	int32_t voxelLod{ 0 };
 };
 
 struct PushConstantsPost {

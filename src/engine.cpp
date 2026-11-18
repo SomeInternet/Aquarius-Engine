@@ -36,6 +36,8 @@ static_assert(sizeof(PushConstantsDownrez) == 32);
 static_assert(offsetof(PushConstantsDownrez, childAdded) == 8);
 static_assert(offsetof(PushConstantsDownrez, currLayer) == 16);
 static_assert(offsetof(PushConstantsDownrez, nextLayer) == 24);
+static_assert(offsetof(PushConstantsPathtracer, flags) == 96);
+static_assert(offsetof(PushConstantsPathtracer, voxelLod) == 100);
 
 //Helpers to, uh, help us set up the descriptors for the shaders
 static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, uint32_t set, VkSpirvResourceTypeFlagsEXT mask, 
@@ -382,12 +384,13 @@ void Engine::createDLSSImages() {
 	_dlssOutputImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_dlssOutputImageInfo);
 	_orcaAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_orcaAlbedoImageInfo);
 	_lodImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_lodImageInfo);
+	_voxelIdImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_voxelIdImageInfo);
 	//TODO: Create additional images for DLSS (might want too look into the depth of field guide)
 
 	//The shaders write these as storage images, so keep them in GENERAL
 	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
 		for (VkImage image : { _diffuseAlbedoImage.image, _specularAlbedoImage.image, _normalRoughnessImage.image, _viewDepthImage.image,
-			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image, _lodImage.image }) {
+			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image, _lodImage.image, _voxelIdImage.image }) {
 			util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 		}
 		});
@@ -403,6 +406,7 @@ void Engine::destroyDLSSImages() {
 	_allocator.destroyImage(_dlssOutputImage);
 	_allocator.destroyImage(_orcaAlbedoImage);
 	_allocator.destroyImage(_lodImage);
+	_allocator.destroyImage(_voxelIdImage);
 	//_allocator.destroyImage(_postInputImage);
 }
 
@@ -416,6 +420,7 @@ void Engine::initDLSSImageDescriptors() {
 	writeImageDescriptor(7, _dlssOutputImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(8, _orcaAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(9, _lodImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+	writeImageDescriptor(10, _voxelIdImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	_allocator.flush(_imageHeap);
 }
 
@@ -696,6 +701,7 @@ void Engine::initPipelinePathtracer() {
 		heapMapping(6, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 7 * imageStride, 0), //DLSS output
 		heapMapping(7, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 8 * imageStride, 0), //ORCA albedo
 		heapMapping(8, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 9 * imageStride, 0), //Hashmap LOD
+		heapMapping(9, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 10 * imageStride, 0), //Voxel id
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -1284,7 +1290,7 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
 	//Debug view to make sure the DLSS/GBuffer images are appearing properly
-	std::vector<const char *> debugViewOptions = {"Pathtraced", "Diffuse Albedo", "Specular Albedo", "Normals", "Depth", "ORCA Albedo", "Hash LOD"};
+	std::vector<const char *> debugViewOptions = {"Pathtraced", "Diffuse Albedo", "Specular Albedo", "Normals", "Depth", "ORCA Albedo", "Hash LOD", "Voxel ID"};
 	const char *selected = debugViewOptions[static_cast<int>(_debugView)];
 
 	if (ImGui::BeginCombo("Debug view", selected)) {
@@ -1297,6 +1303,8 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 		}
 		ImGui::EndCombo();
 	}
+
+	ImGui::SliderInt("Voxel LOD", &_pcpt.voxelLod, HASHMAP_MIN_LOD, HASHMAP_MAX_LOD);
 
 	int maxBounces = _pcpt.maxBounces;
 	ImGui::SliderInt("Max bounces", &maxBounces, 1, 20);
@@ -1551,6 +1559,7 @@ void Engine::draw() {
 		case EngineDebugView::DEPTH: debugImage = &_viewDepthImage; break;
 		case EngineDebugView::ORCA_ALBEDO: debugImage = &_orcaAlbedoImage; break;
 		case EngineDebugView::HASH_LOD: debugImage = &_lodImage; break;
+		case EngineDebugView::VOXEL_ID: debugImage = &_voxelIdImage; break;
 		default: break;
 		}
 
