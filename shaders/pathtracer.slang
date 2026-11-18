@@ -59,17 +59,20 @@ void rayGeneration() {
         HitObject::Invoke<HitPayload>(tlas, hitObject, payload);
         seed = payload.seed;
 
-        bool found = false;
-        if (!i && hitObject.IsHit() && (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags)) {
-            
-            float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-            if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
-                MIN_LOD, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
-                found = true;
+        if (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) {
+            bool found = false;
+            if (!i && hitObject.IsHit() && (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags)) {
+
+                float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
+                if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
+                MIN_LOD + 1, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
+                    found = true;
+                }
             }
+            if (!found) cachedRadiance = float3(0.f);
+            break;
         }
-        if (!found) cachedRadiance = float3(0.f);
-        if (found) break;
+
 
         // Temp, visualize second-hit samples from hashmap queries
         if (!i) dir = payload.rayDir;
@@ -78,7 +81,7 @@ void rayGeneration() {
             hashMapQueried = true;
             uint address;
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-            found = false;
+            bool found = false;
             for(int j = MIN_LOD; j < MAX_LOD; ++j) {
                 if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
                 j, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {

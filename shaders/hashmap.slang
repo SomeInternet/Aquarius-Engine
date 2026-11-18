@@ -192,7 +192,7 @@ out float3 radiance, bool heatMapDebug = false) {
             // Found empty slot or existing entry. Break out of loop
             entry = SEARCH_LENGTH;
             //radiance = hashHeatMap[lod - MIN_LOD];
-            radiance = heatMapDebug ? hashHeatMap[lod - MIN_LOD] : float3(radiances[finalAddress]) / (counts[finalAddress] * RADIANCE_CONVERSION_SCALE);
+            radiance = float3(radiances[finalAddress]) / (counts[finalAddress] * RADIANCE_CONVERSION_SCALE);
         }
     }
 
