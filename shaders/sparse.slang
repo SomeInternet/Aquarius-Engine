@@ -186,7 +186,7 @@ void rayGeneration() {
 
     // Path terminus: cache the radiance into the view dir and pos of the first indirect hit,
     // and record the new finest slot for downrez
-    if (surfaceHitCount >= 2) {
+    if (surfaceHitCount >= 2 && length(cacheRadiance) > 0.f) {
         uint address;
         HashMapResult result = populate(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
                                         pc.hashMap->childAddressBuffer, NUM_HASH_MAP_ENTRIES, indirectHitDir, indirectHitPos,
