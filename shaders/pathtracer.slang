@@ -82,7 +82,7 @@ void rayGeneration() {
             uint address;
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
             bool found = false;
-            for(int j = MIN_LOD; j < MAX_LOD; ++j) {
+            for(int j = MIN_LOD; j <= MAX_LOD; ++j) {
                 if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
                 j, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
                     found = true;

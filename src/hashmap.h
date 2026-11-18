@@ -1,7 +1,7 @@
 #pragma once
 #include "allocator.h"
 
-constexpr int NUM_HASH_MAP_ENTRIES = 1036800; //1920 * 1080 * 6 (LODs) / 16
+constexpr int NUM_HASH_MAP_ENTRIES = 2073600; //1920 * 1080 * 8 (LODs) / 16
 constexpr int LIST_SIZE = 1048575;
 
 // Match MIN_LOD, MAX_LOD, and BLOCK_SIZE in shaders/hashmap.slang and shaders/downrez.slang.
