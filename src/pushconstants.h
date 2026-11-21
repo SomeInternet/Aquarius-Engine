@@ -38,6 +38,8 @@ struct PushConstantsPathtracer {
 
 	EngineStateFlags flags{ 0 };
 	int32_t heatMapLod{ HASHMAP_MAX_LOD };
+
+	VkDeviceAddress sparsePixels{};
 };
 
 struct PushConstantsPost {
@@ -101,4 +103,17 @@ struct PushConstantsDownrez {
 	VkDeviceAddress childAdded;
 	VkDeviceAddress currLayer;
 	VkDeviceAddress nextLayer;
+};
+
+// pixel buffer for sparse pathtracing
+constexpr uint32_t SPARSE_PIXEL_CAPACITY = 1920u * 1080u;
+
+struct SparsePixel {
+	uint16_t x;
+	uint16_t y;
+};
+
+struct SparsePixelList {
+	uint32_t count;
+	SparsePixel pixels[SPARSE_PIXEL_CAPACITY];
 };

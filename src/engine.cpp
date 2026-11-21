@@ -36,6 +36,9 @@ static_assert(sizeof(PushConstantsDownrez) == 32);
 static_assert(offsetof(PushConstantsDownrez, childAdded) == 8);
 static_assert(offsetof(PushConstantsDownrez, currLayer) == 16);
 static_assert(offsetof(PushConstantsDownrez, nextLayer) == 24);
+static_assert(sizeof(SparsePixel) == 4);
+static_assert(offsetof(SparsePixelList, pixels) == 4);
+static_assert(sizeof(SparsePixelList) == 4 + 4 * SPARSE_PIXEL_CAPACITY);
 
 //Helpers to, uh, help us set up the descriptors for the shaders
 static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, uint32_t set, VkSpirvResourceTypeFlagsEXT mask, 
@@ -1229,6 +1232,23 @@ void Engine::initGPUHashMaps() {
 	});
 }
 
+void Engine::createSparsePixelBuffers() {
+	for (auto& frame : _frameResources) {
+		frame._sparsePixelBuffer = _allocator.createBuffer(sizeof(SparsePixelList), 
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, true);
+
+		
+		memset(frame._sparsePixelBuffer.info.pMappedData, 0, sizeof(SparsePixelList));
+
+		_allocator.flush(frame._sparsePixelBuffer);
+	}
+
+	_deletionQueue.push([this]() {
+		for (auto& frame : _frameResources)
+			_allocator.destroyBuffer(frame._sparsePixelBuffer);
+	});
+}
+
 void Engine::initImgui() {
 	ImGui::CreateContext();
 
@@ -1482,6 +1502,7 @@ void Engine::draw() {
 	_pcpt.sceneData = _sceneDataBuffer.address;
 	_pcpt.totalFrames = _totalFrames;
 	_pcpt.hashMap = hashMap.hashMapUniformBuffer.address;
+	_pcpt.sparsePixels = getCurrFrame()._sparsePixelBuffer.address;
 
 	SharcConfig config{};
 	config.sceneScale = _sharcSceneScale;
@@ -1704,6 +1725,7 @@ void Engine::init() {
 
 	createSharcBuffers();
 	initGPUHashMaps();
+	createSparsePixelBuffers();
 
 	initPipelinePathtracer();
 	initPipelineUpdate();

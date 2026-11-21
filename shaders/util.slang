@@ -110,6 +110,18 @@ struct SceneData {
     float totalEnvWeight = 0.f;
 };
 
+static const uint SPARSE_PIXEL_CAPACITY = 1920u * 1080u;
+
+struct SparsePixel {
+    int16_t x;
+    int16_t y;
+};
+
+struct SparsePixelList {
+    uint count;
+    SparsePixel pixels[SPARSE_PIXEL_CAPACITY];
+};
+
 enum EngineStateFlags : uint32_t {
     IBL = 1 << 0,
     RAY_RECONSTRUCTION = 1 << 1,
@@ -138,6 +150,8 @@ struct PushConstantsPathtracer {
 
     EngineStateFlags flags;
     int heatMapLod;
+
+    SparsePixelList *sparsePixels;
 };
 
 struct HitPayload {
