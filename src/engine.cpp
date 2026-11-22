@@ -1582,6 +1582,8 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 
 	//Perform depth draw loop
 	//Maybe add a helper for scene that takes in a lambda...?
+	VkDeviceAddress prevInstanceBuffer = _scene.instanceBuffers[(_totalFrames + 1) % (FRAMES_IN_FLIGHT + 1)].address;
+	VkDeviceAddress currInstanceBuffer = _scene.instanceBuffers[_totalFrames % (FRAMES_IN_FLIGHT + 1)].address;
 
 	vkCmdEndRendering(commandBuffer);
 
@@ -1630,6 +1632,7 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 		VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_NONE);
 
 	//Clear to zero so pixels no geometry covers don't keep last frame's data
+	//Might have to do something different for the depth...
 	VkClearValue gbufferClear{};
 
 	std::array colorAttachmentInfos = {
@@ -1733,7 +1736,7 @@ void Engine::draw() {
 
 		int frameIdx = _totalFrames % FRAMES_IN_FLIGHT;
 
-		loader::updateScene(_device, _allocator, _scene, _dispatchTable, time, frameIdx);
+		loader::updateScene(_device, _allocator, _scene, _dispatchTable, time, _totalFrames);
 
 		//Rebuild the TLAS
 		VkAccelerationStructureGeometryKHR tlasGeometry = _scene.tlas.geometry;

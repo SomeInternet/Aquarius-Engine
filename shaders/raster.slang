@@ -2,15 +2,14 @@
 #include "util.slang"
 
 struct RasterPushConstants {
-    float4x4 viewProj;
-    float4x4 model; // Might not need this
-    float4x4 prevModel; //For motion vectors?
+    CameraData *cam;
     Material *materials;
+    VkInstance *instances;
+    VkInstance *prevInstances;
 
     float4 *posBuffer;
     Vertex *vertBuffer;
 
-    float3 camPos;
     int materialIdx;
     int instanceIdx;
 };
@@ -21,6 +20,8 @@ struct GBufferFSInput {
     float3 nor;
     float3 tan;
     half2 uv;
+    float4 currClip;
+    float4 prevClip;
 };
 
 //NOTE: If anyone changes this, make sure to update the color attachment info in the raster pipeline setup!
@@ -52,11 +53,17 @@ RasterPushConstants pc;
 GBufferFSInput vertMain(uint32_t idx: SV_VertexID) {
     // Do the usual projection
     GBufferFSInput output = {};
-    output.worldPos = pc.posBuffer[idx].xyz;
-    output.fragPos = mul(pc.viewProj, mul(pc.model, float4(output.worldPos, 1.f)));
-    output.nor = fromOctahedral(pc.vertBuffer[idx].nor);
-    output.tan = fromOctahedral(pc.vertBuffer[idx].tan);
-    output.uv = pc.vertBuffer[idx].uv;
+    VkInstance inst = pc.instances[pc.instanceIdx];
+    float3 objPos = pc.posBuffer[idx].xyz;
+    Vertex v = pc.vertBuffer[idx];
+
+    output.fragPos = instanceToClip(pc.cam->currViewProj, inst, objPos, output.worldPos);
+    output.currClip = output.fragPos;
+    output.prevClip = mul(pc.cam->prevViewProj, float4(instanceTransformPoint(pc.prevInstances[pc.instanceIdx], objPos), 1.f));
+
+    output.nor = instanceTransformNormal(inst, fromOctahedral(v.nor));
+    output.tan = instanceTransformDir(inst, fromOctahedral(v.tan));
+    output.uv = v.uv;
     return output;
 }
 
@@ -77,23 +84,28 @@ GBufferFSOutput fragMain(GBufferFSInput input) {
     output.albedoMetallic.w = metallicRoughness.x;
     output.normalRoughness.w = metallicRoughness.y;
 
-    output.normalRoughness.xyz = input.nor;
+    float3 nor = normalize(input.nor);
+    output.normalRoughness.xyz = nor;
     if (mat.norImgIdx != -1) {
         float3 mNor = sampleTex(mat.norImgIdx, mat.norSamplerIdx, input.uv, float4(0.f)).xyz;
 
+        float3 tan = input.tan - nor * dot(nor, input.tan);
+        float tanLen = length(tan);
+
         PointInfo pointInfo = {};
-        pointInfo.nor = input.nor;
-        pointInfo.tan = input.tan;
+        pointInfo.nor = nor;
+        pointInfo.tan = tanLen > 1e-6f ? tan / tanLen : fallbackTangent(nor);
         applyNormalMap(pointInfo, mNor);
 
         output.normalRoughness.xyz = pointInfo.nor;
     }
 
-    float4 clipSpacePrevPos = mul(pc.viewProj, mul(pc.prevModel, float4(input.worldPos, 1.f)));
-    output.motionVectors = (input.fragPos - clipSpacePrevPos / clipSpacePrevPos.w).xy;
+    float2 currNdc = input.currClip.xy / input.currClip.w;
+    float2 prevNdc = input.prevClip.xy / input.prevClip.w;
+    output.motionVectors = (prevNdc - currNdc) * 0.5f;
 
-    output.pos = mul(pc.model, float4(input.worldPos, 1.f)).xyz;
-    output.depth = length(output.pos - pc.camPos);
+    output.pos = input.worldPos;
+    output.depth = length(output.pos - pc.cam->camPos);
 
     return output;
 

@@ -728,7 +728,7 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
     }
 
     newScene.instanceBuffers.clear();
-    for (int i = 0; i < FRAMES_IN_FLIGHT; ++i) {
+    for (int i = 0; i < FRAMES_IN_FLIGHT + 1; ++i) {
         newScene.instanceBuffers.push_back(allocator.uploadBuffer(vkInstances.data(), vkInstances.size() * sizeof(VkAccelerationStructureInstanceKHR),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, VMA_MEMORY_USAGE_CPU_TO_GPU, true));
     }
@@ -814,7 +814,7 @@ static void getInterpFacs(std::vector<float> &times, float time, int &i, int &j,
     x = (time - times[i]) / (times[j] - times[i]);
 }
 
-void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, vkb::DispatchTable &dispatchTable, float time, int frameIdx) {
+void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, vkb::DispatchTable &dispatchTable, float time, int frameNum) {
     //Interpolate animation values and send them to the nodes
     for (auto &anim : scene.animations) {
         //Wrap time
@@ -856,7 +856,8 @@ void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, v
     }
 
     //Propagate changes to the instance buffer
-    auto *instanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(scene.instanceBuffers[frameIdx].info.pMappedData);
+    auto *instanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(scene.instanceBuffers[frameNum % (FRAMES_IN_FLIGHT + 1)].info.pMappedData);
+    auto *prevInstanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(scene.instanceBuffers[(frameNum - 1) % (FRAMES_IN_FLIGHT + 1)].info.pMappedData);
     for (int i = 0; i < scene.instanceNodes.size(); ++i) {
         if (scene.instanceNodes[i] < 0) continue;
 
@@ -864,7 +865,7 @@ void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, v
         glm::mat4 transformRowMajor = glm::transpose(scene.nodeTransforms[scene.instanceNodes[i]]);
         memcpy(&instanceBuffer[i].transform, glm::value_ptr(transformRowMajor), sizeof(VkTransformMatrixKHR));
     }
-    allocator.flush(scene.instanceBuffers[frameIdx]);
+    allocator.flush(scene.instanceBuffers[frameNum]);
 }
 
 void loader::destroyScene(VkDevice &device, Allocator &allocator, Scene &scene, vkb::DispatchTable &dispatchTable) {

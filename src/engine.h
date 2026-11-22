@@ -26,6 +26,8 @@ struct FrameResources {
 	VkFence _renderFence{ VK_NULL_HANDLE }; //Wait to record the command buffer until the fence is signalled
 	AllocatedBuffer _sharcConfigBuffer;
 
+	AllocatedBuffer _cameraData{};
+
 	//buffers for sparse pixel paths, each frame has its own buffer
 	AllocatedBuffer _sparsePixelBuffer{};
 	//Given we're not accumulating, I think we ought to move a lot of the images here
