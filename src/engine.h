@@ -20,12 +20,34 @@ struct FrameResources {
 	VkCommandPool _commandPool{ VK_NULL_HANDLE };
 	VkCommandBuffer _commandBuffer{ VK_NULL_HANDLE };
 
+	//Probably want to configure a more complex synchronization system, given we could probably run frames more in parallel
+	//Subject to profiling
 	VkSemaphore _swapChainSemaphore{ VK_NULL_HANDLE }; //Wait to perform rendering operations on the GPU until the swap chain semaphore is signalled
 	VkFence _renderFence{ VK_NULL_HANDLE }; //Wait to record the command buffer until the fence is signalled
 	AllocatedBuffer _sharcConfigBuffer;
 
 	//buffers for sparse pixel paths, each frame has its own buffer
 	AllocatedBuffer _sparsePixelBuffer{};
+	//Given we're not accumulating, I think we ought to move a lot of the images here
+	AllocatedImage _diffuseAlbedoImage;
+	AllocatedImage _specularAlbedoImage;
+	AllocatedImage _normalRoughnessImage;
+	AllocatedImage _viewDepthImage;
+	AllocatedImage _motionVectorImage;
+	AllocatedImage _specHitDistImage;
+	AllocatedImage _dlssOutputImage;
+	AllocatedImage _orcaAlbedoImage;
+	AllocatedImage _postInputImage;
+
+	VkImageViewCreateInfo _diffuseAlbedoImageInfo{};
+	VkImageViewCreateInfo _specularAlbedoImageInfo{};
+	VkImageViewCreateInfo _normalRoughnessImageInfo{};
+	VkImageViewCreateInfo _viewDepthImageInfo{};
+	VkImageViewCreateInfo _motionVectorImageInfo{};
+	VkImageViewCreateInfo _specHitDistImageInfo{};
+	VkImageViewCreateInfo _dlssOutputImageInfo{};
+	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
+	VkImageViewCreateInfo _postInputImageInfo{};
 };
 
 struct VkbData {
@@ -50,15 +72,22 @@ constexpr int FRAMES_IN_FLIGHT = 3;
 
 //DLSS images also serve as the g-buffer for ORCA
 //0: radiance image
-//1: diffuse-albedo (+metallic)
+//1: diffuse-albedo
 //2: specular-albedo (+packed transmissiveness and IOR)
 //3: normal-roughness
 //4: view-depth
 //5: motion vectors
 //6: specular hit distance
 //7: dlss output
-//8: ORCA albedo
+//8: ORCA albedo (+metallic?)
 //9: TODO: post
+#define albedoMetallicFormat VK_FORMAT_R16G16B16A16_SFLOAT //Albedo-metallic
+#define posFormat VK_FORMAT_R32G32B32_SFLOAT //Pos
+#define normalRoughnessFormat VK_FORMAT_R16G16B16A16_SFLOAT //Normal-roughness
+#define motionVectorsFormat VK_FORMAT_R16G16_SFLOAT //Motion vectors
+#define depthFormat VK_FORMAT_R32_SFLOAT //Depth
+constexpr uint32_t RASTER_GBUFFER_SIZE = 5;
+
 constexpr int ENGINE_IMAGES = 10;
 constexpr int HDR_IMAGES = 1;
 constexpr int N_IMAGE_DESCRIPTORS = 4096;
@@ -102,6 +131,9 @@ private:
 	//TODO: Consider adding more command pools
 	VkCommandPool _immCommandPool;
 	VkCommandBuffer _immCommandBuffer;
+
+	VkPipeline _pipelineDepth;
+	VkPipeline _pipelineRaster;
 
 	VkPipeline _pipelinePathtracer;
 	VkPipeline _pipelineSharcUpdate;
@@ -186,7 +218,9 @@ private:
 	AllocatedImage _specHitDistImage;
 	AllocatedImage _dlssOutputImage;
 	AllocatedImage _orcaAlbedoImage;
+	AllocatedImage _posImage;
 	AllocatedImage _postInputImage;
+	AllocatedImage _depthImage;
 
 	VkImageViewCreateInfo _diffuseAlbedoImageInfo{};
 	VkImageViewCreateInfo _specularAlbedoImageInfo{};
@@ -265,6 +299,7 @@ private:
 	void initPipelineUpdate();
 	void initPipelineDownrez();
 	void initPipelineResolve();
+	void initPipelineRaster();
 	void initPipelinePost();
 
 	void createSharcBuffers();
@@ -277,6 +312,7 @@ private:
 	void initGPUHashMaps();
 
 	void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
+	void rasterize(VkCommandBuffer commandBuffer);
 	void draw();
 
 	void resize();

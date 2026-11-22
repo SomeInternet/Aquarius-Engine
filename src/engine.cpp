@@ -51,7 +51,7 @@ static VkDescriptorSetAndBindingMappingEXT heapMapping(uint32_t binding, uint32_
 	mapping.resourceMask = mask;
 	mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
 	mapping.sourceData.constantOffset.heapOffset = heapOffset;
-	mapping.sourceData.constantOffset.heapArrayStride = heapArrayStride; 
+	mapping.sourceData.constantOffset.heapArrayStride = heapArrayStride; //Declares the stride between elements in a descriptor array (the declaration in the shader completes the declaration as an array
 	return mapping;
 }
 
@@ -378,12 +378,12 @@ void Engine::createDLSSImages() {
 
 	_diffuseAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_diffuseAlbedoImageInfo);
 	_specularAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_specularAlbedoImageInfo);
-	_normalRoughnessImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, debugViewUsage, false, &_normalRoughnessImageInfo);
-	_viewDepthImage = _allocator.createImage(extent, VK_FORMAT_R32_SFLOAT, debugViewUsage, false, &_viewDepthImageInfo);
-	_motionVectorImage = _allocator.createImage(extent, VK_FORMAT_R32G32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_motionVectorImageInfo);
+	_normalRoughnessImage = _allocator.createImage(extent, normalRoughnessFormat, debugViewUsage, false, &_normalRoughnessImageInfo);
+	_viewDepthImage = _allocator.createImage(extent, depthFormat, debugViewUsage, false, &_viewDepthImageInfo);
+	_motionVectorImage = _allocator.createImage(extent, motionVectorsFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_motionVectorImageInfo);
 	_specHitDistImage = _allocator.createImage(extent, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_specHitDistImageInfo);
 	_dlssOutputImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_dlssOutputImageInfo);
-	_orcaAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_orcaAlbedoImageInfo);
+	_orcaAlbedoImage = _allocator.createImage(extent, albedoMetallicFormat, debugViewUsage, false, &_orcaAlbedoImageInfo);
 	//TODO: Create additional images for DLSS (might want too look into the depth of field guide)
 
 	//The shaders write these as storage images, so keep them in GENERAL
@@ -1188,6 +1188,171 @@ void Engine::resolveSharc(VkCommandBuffer commandBuffer) {
 	_sharcCameraPositionPrev = cameraPosition;
 }
 
+void Engine::initPipelineRaster() {
+	VkDeviceSize imageStride = _imageHeapLayout.stride;
+
+	//BUILD THE DEPTH PREPASS PIPELINE
+	//A lot of this involves configuring all of the various fixed pipeline stages
+	VkShaderModule moduleDepth = util::loadShaderModule("./build/shaders/depth.spv", _device);
+
+	std::vector<VkPipelineShaderStageCreateInfo> shaderStagesDepth = {
+		init::pipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, moduleDepth, "vertMain"), //Fragment skipped because we're just writing depth
+	};
+
+	//Tell Vulkan how to interpret the geometry data into primitives
+	VkPipelineInputAssemblyStateCreateInfo inputAssembly{.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+	inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+	
+	//Tell Vulkan how to rasterize
+	VkPipelineRasterizationStateCreateInfo rasterizer{.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+	rasterizer.lineWidth = 1.f;
+	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+	rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+	//Disable MSAA
+	VkPipelineMultisampleStateCreateInfo multisampling{ .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+	multisampling.sampleShadingEnable = VK_FALSE;
+	multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	multisampling.minSampleShading = 1.0f;
+	multisampling.pSampleMask = nullptr;
+	multisampling.alphaToCoverageEnable = VK_FALSE;
+	multisampling.alphaToOneEnable = VK_FALSE;
+
+	//Ordinarily we'd create a pipeline layout, but that changes with the use of descriptor heaps
+
+	VkPipelineCreateFlags2CreateInfo flags{ .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO };
+	flags.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+
+	//Configure the depth stencil (basically, depth testing info)
+	VkPipelineDepthStencilStateCreateInfo depthStencil{ .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+	depthStencil.depthTestEnable = VK_TRUE;
+	depthStencil.depthWriteEnable = VK_TRUE;
+	depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+	depthStencil.depthBoundsTestEnable = VK_FALSE;
+	depthStencil.stencilTestEnable = VK_FALSE;
+	depthStencil.front = {};
+	depthStencil.back = {};
+	depthStencil.minDepthBounds = 0.f;
+	depthStencil.maxDepthBounds = 1.f;
+
+	//No color attachments for the depth prepass
+	VkPipelineRenderingCreateInfo renderInfo{ .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+	renderInfo.pNext = &flags;
+	renderInfo.colorAttachmentCount = 0;
+	renderInfo.pColorAttachmentFormats = nullptr;
+
+	renderInfo.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+	//Required to pass this in, but we aren't using it, so we'll leave it blank
+	VkPipelineVertexInputStateCreateInfo vertexInputInfo{ .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+
+	//We will dynamically set the viewport and scissor
+	VkPipelineViewportStateCreateInfo viewportState{ .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+	viewportState.viewportCount = 1;
+	viewportState.scissorCount = 1;
+
+	std::array state = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+	VkPipelineDynamicStateCreateInfo dynamicInfo{ .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+	dynamicInfo.dynamicStateCount = state.size();
+	dynamicInfo.pDynamicStates = state.data();
+
+	VkGraphicsPipelineCreateInfo depthPipelineInfo{ .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+	depthPipelineInfo.pNext = &renderInfo;
+	depthPipelineInfo.stageCount = shaderStagesDepth.size();
+	depthPipelineInfo.pStages = shaderStagesDepth.data();
+	depthPipelineInfo.pVertexInputState = &vertexInputInfo;
+	depthPipelineInfo.pInputAssemblyState = &inputAssembly;
+	depthPipelineInfo.pViewportState = &viewportState;
+	depthPipelineInfo.pRasterizationState = &rasterizer;
+	depthPipelineInfo.pMultisampleState = &multisampling;
+	depthPipelineInfo.pDepthStencilState = &depthStencil;
+	depthPipelineInfo.layout = nullptr; //Using descriptor heaps, so we don't use a pipeline layout
+	depthPipelineInfo.pColorBlendState = nullptr;
+	depthPipelineInfo.pDynamicState = &dynamicInfo;
+
+	//Call vkBuildGraphicsPipelines
+	//TODO: Probably not something worth thinking about too much, but I wonder if it'd be more efficient to build both pipelines at once...
+	VK_CHECK(vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &depthPipelineInfo, nullptr, &_pipelineDepth));
+
+	//Clean up after yourself, kiddos
+	vkDestroyShaderModule(_device, moduleDepth, nullptr);
+	
+	//Since building pipelines is synchronous, we can reuse the structs
+
+	//Add in the color attachment info for the raster (Gbuffer) pass
+	VkFormat colorAttachmentFormat = VK_FORMAT_R8G8B8A8_UNORM;
+
+	std::array colorAttachmentFormats = {
+		albedoMetallicFormat,
+		posFormat,
+		normalRoughnessFormat,
+		motionVectorsFormat,
+		depthFormat
+	};
+
+	renderInfo.colorAttachmentCount = colorAttachmentFormats.size();
+	renderInfo.pColorAttachmentFormats = colorAttachmentFormats.data();
+
+	//Specify color blending here, as we didn't need to for the depth prepress
+	VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	colorBlendAttachment.blendEnable = VK_FALSE;
+
+	std::array<VkPipelineColorBlendAttachmentState, colorAttachmentFormats.size()> colorBlendAttachments;
+	colorBlendAttachments.fill(colorBlendAttachment);
+
+	VkPipelineColorBlendStateCreateInfo colorBlending{};
+	colorBlending.logicOpEnable = VK_FALSE; //Don't use bitwise color blending operations
+	colorBlending.logicOp = VK_LOGIC_OP_COPY;
+	colorBlending.attachmentCount = colorBlendAttachments.size();
+	colorBlending.pAttachments = colorBlendAttachments.data();
+
+	//Disable writing for the depth stencil
+	depthStencil.depthWriteEnable = VK_FALSE;
+
+	//BUILD THE MAIN RASTER (GBUFFER) PIPELINE
+	VkShaderModule moduleRaster = util::loadShaderModule("./build/shaders/raster.spv", _device);
+
+	std::vector<VkPipelineShaderStageCreateInfo> shaderStagesRaster = {
+		init::pipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, moduleRaster, "vertMain"),
+		init::pipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, moduleRaster, "fragMain")
+	};
+
+	//TODO: Might have to change this for per frame resources
+	//Fun fact: since there are only 2 heaps at a time, Vulkan works out which heap a binding comes from by the type
+	std::array mappingsRaster = {
+		heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, imageStride),
+		heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE) * imageStride, imageStride),
+		heapMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride)
+	};
+
+	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
+	mappingInfo.mappingCount = mappingsRaster.size();
+	mappingInfo.pMappings = mappingsRaster.data();
+
+	//Point the raster pass to the info it needs for the bindings
+	shaderStagesRaster[1].pNext = &mappingInfo;
+	
+	VkGraphicsPipelineCreateInfo rasterPipelineInfo{.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+	rasterPipelineInfo.pNext = &renderInfo;
+	rasterPipelineInfo.stageCount = shaderStagesRaster.size();
+	rasterPipelineInfo.pStages = shaderStagesRaster.data();
+	rasterPipelineInfo.pVertexInputState = &vertexInputInfo;
+	rasterPipelineInfo.pInputAssemblyState = &inputAssembly;
+	rasterPipelineInfo.pViewportState = &viewportState;
+	rasterPipelineInfo.pRasterizationState = &rasterizer;
+	rasterPipelineInfo.pMultisampleState = &multisampling;
+	rasterPipelineInfo.pDepthStencilState = &depthStencil;
+	rasterPipelineInfo.layout = nullptr; //Using descriptor heaps, so we don't use a pipeline layout
+	rasterPipelineInfo.pColorBlendState = &colorBlending;
+	rasterPipelineInfo.pDynamicState = &dynamicInfo;
+
+	VK_CHECK(vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &rasterPipelineInfo, nullptr, &_pipelineRaster));
+
+	vkDestroyShaderModule(_device, moduleRaster, nullptr);
+}
+
 void Engine::initPipelinePost() {
 	VkShaderModule modulePost = util::loadShaderModule("./build/shaders/post.spv", _device);
 
@@ -1369,6 +1534,155 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	vkCmdEndRendering(commandBuffer);
 }
 
+void Engine::rasterize(VkCommandBuffer commandBuffer) {
+	VkViewport viewport{};
+	viewport.x = 0;
+	viewport.y = 0;
+	viewport.width = _renderExtent.width;
+	viewport.height = _renderExtent.height;
+	viewport.minDepth = 0;
+	viewport.maxDepth = 1;
+
+	VkRect2D scissor{};
+	scissor.offset.x = 0;
+	scissor.offset.y = 0;
+	scissor.extent.width = _renderExtent.width;
+	scissor.extent.height = _renderExtent.height;
+
+	FrameResources &currFrame = getCurrFrame();
+
+	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineDepth);
+
+	//Recall: memory barriers guarantee that the destination stages occur after the source stages, and that the source operations are visible to the destination accesses
+	VkImageMemoryBarrier2 preDepthBarrier{ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+	preDepthBarrier.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT; //Early is before the frag shader, where late is after
+	preDepthBarrier.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; //This isn't terribly important here therefore, by the above note
+	preDepthBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+	preDepthBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	preDepthBarrier.image = _depthImage.image; //TODO: Change this if we make these per-frame resources
+	preDepthBarrier.subresourceRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_DEPTH_BIT);
+	preDepthBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; //TODO: See about optimizing this?
+	preDepthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+	VkDependencyInfo preDepthDependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+	preDepthDependency.imageMemoryBarrierCount = 1;
+	preDepthDependency.pImageMemoryBarriers = &preDepthBarrier;
+	vkCmdPipelineBarrier2(commandBuffer, &preDepthDependency);
+
+	VkRenderingAttachmentInfo depthAttachment = init::depthAttachmentInfo(_depthImage.imageView);
+
+	//Clear the depth image
+	VkRenderingInfo depthRenderInfo{.sType = VK_STRUCTURE_TYPE_RENDERING_INFO};
+	depthRenderInfo.colorAttachmentCount = 0;
+	depthRenderInfo.pColorAttachments = nullptr;
+	depthRenderInfo.pDepthAttachment = &depthAttachment;
+
+	vkCmdBeginRendering(commandBuffer, &depthRenderInfo);
+	vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+	vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+	//Perform depth draw loop
+	//Maybe add a helper for scene that takes in a lambda...?
+
+	vkCmdEndRendering(commandBuffer);
+
+	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineRaster);
+
+	//We gotta set a barrier to make sure the depth pass has written the depth before we depth test
+	VkImageMemoryBarrier2 preRasterDepthBarrier{ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+	preRasterDepthBarrier.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+	preRasterDepthBarrier.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	preRasterDepthBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+	preRasterDepthBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+	preRasterDepthBarrier.image = _depthImage.image;
+	preRasterDepthBarrier.subresourceRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_DEPTH_BIT);
+	preRasterDepthBarrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+	preRasterDepthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL;
+
+	//Set a barrier to make sure the gbuffer is not in use
+	VkImageMemoryBarrier2 preRasterAttachmentBarrier{ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+	preRasterAttachmentBarrier.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; //Wait on the ray tracing and compute shaders because that's when they're used
+	preRasterAttachmentBarrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT; //Again, this shouldn't be terribly important
+	preRasterAttachmentBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+	preRasterAttachmentBarrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+	preRasterAttachmentBarrier.subresourceRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
+	preRasterAttachmentBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	preRasterAttachmentBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	std::array<VkImageMemoryBarrier2, RASTER_GBUFFER_SIZE + 1> preRasterAttachmentBarriers;
+	preRasterAttachmentBarriers.fill(preRasterAttachmentBarrier);
+
+	//CHANGE THESE IF WE MAKE THESE PER-FRAME RESOURCES
+	preRasterAttachmentBarriers[0].image = _orcaAlbedoImage.image;
+	preRasterAttachmentBarriers[1].image = _posImage.image;
+	preRasterAttachmentBarriers[2].image = _normalRoughnessImage.image;
+	preRasterAttachmentBarriers[3].image = _motionVectorImage.image;
+	preRasterAttachmentBarriers[4].image = _viewDepthImage.image;
+
+	preRasterAttachmentBarriers[5] = preRasterDepthBarrier;
+
+	VkDependencyInfo preRasterDependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+	preRasterDependency.imageMemoryBarrierCount = preRasterAttachmentBarriers.size();
+	preRasterDependency.pImageMemoryBarriers = preRasterAttachmentBarriers.data();
+
+	vkCmdPipelineBarrier2(commandBuffer, &preRasterDependency);
+
+	VkRenderingAttachmentInfo rasterDepthAttachment = init::depthAttachmentInfo(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL,
+		VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_NONE);
+
+	//Clear to zero so pixels no geometry covers don't keep last frame's data
+	VkClearValue gbufferClear{};
+
+	std::array colorAttachmentInfos = {
+		init::renderingAttachmentInfo(_orcaAlbedoImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(_posImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(_normalRoughnessImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(_motionVectorImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(_viewDepthImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+	};
+
+	VkRenderingInfo rasterRenderInfo{ .sType = VK_STRUCTURE_TYPE_RENDERING_INFO };
+	rasterRenderInfo.colorAttachmentCount = 0;
+	rasterRenderInfo.pColorAttachments = nullptr;
+	rasterRenderInfo.pDepthAttachment = &depthAttachment;
+
+	vkCmdBeginRendering(commandBuffer, &rasterRenderInfo);
+	vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+	vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+	//Perform raster draw loop
+
+	vkCmdEndRendering(commandBuffer);
+
+	//Record a dependency to make the outputs visible to the later passes
+
+	//Set a barrier to make sure the gbuffer is not in use
+	//Sort of the reverse of the barrier from earlier
+	VkImageMemoryBarrier2 postRasterAttachmentBarrier{ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+	postRasterAttachmentBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+	postRasterAttachmentBarrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+	postRasterAttachmentBarrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	postRasterAttachmentBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+	postRasterAttachmentBarrier.subresourceRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
+	postRasterAttachmentBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	postRasterAttachmentBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+	std::array<VkImageMemoryBarrier2, RASTER_GBUFFER_SIZE> postRasterAttachmentBarriers;
+	postRasterAttachmentBarriers.fill(postRasterAttachmentBarrier);
+
+	//CHANGE THESE IF WE MAKE THESE PER-FRAME RESOURCES
+	postRasterAttachmentBarriers[0].image = _orcaAlbedoImage.image;
+	postRasterAttachmentBarriers[1].image = _posImage.image;
+	postRasterAttachmentBarriers[2].image = _normalRoughnessImage.image;
+	postRasterAttachmentBarriers[3].image = _motionVectorImage.image;
+	postRasterAttachmentBarriers[4].image = _viewDepthImage.image;
+
+	VkDependencyInfo postRasterDependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+	postRasterDependency.imageMemoryBarrierCount = postRasterAttachmentBarriers.size();
+	postRasterDependency.pImageMemoryBarriers = postRasterAttachmentBarriers.data();
+
+	vkCmdPipelineBarrier2(commandBuffer, &postRasterDependency);
+}
+
 void Engine::draw() {
 	FrameResources &currFrame = getCurrFrame();
 
@@ -1394,7 +1708,7 @@ void Engine::draw() {
 	VkCommandBufferBeginInfo beginInfo = init::commandBufferBeginInfo(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 	VK_CHECK(vkBeginCommandBuffer(commandBuffer, &beginInfo));
 
-	//Bind out descriptor heaps
+	//Bind our descriptor heaps
 	//TODO: Consider caching?
 	VkBindHeapInfoEXT imageHeapBind{ .sType = VK_STRUCTURE_TYPE_BIND_HEAP_INFO_EXT };
 	imageHeapBind.heapRange = { _imageHeap.address, _imageHeapLayout.size };

@@ -3,6 +3,8 @@
 #include <glm/gtc/packing.hpp>
 #include <vulkan/vulkan.h>
 
+#include <functional>
+
 #include "allocator.h"
 
 //Nor and tan are octahedral-encoded, and everything is half-precision
