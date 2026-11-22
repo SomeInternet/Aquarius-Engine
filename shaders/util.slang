@@ -113,8 +113,8 @@ struct SceneData {
 static const uint SPARSE_PIXEL_CAPACITY = 1920u * 1080u;
 
 struct SparsePixel {
-    int16_t x;
-    int16_t y;
+    uint16_t x;
+    uint16_t y;
 };
 
 struct SparsePixelList {

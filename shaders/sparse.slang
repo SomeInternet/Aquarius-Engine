@@ -58,13 +58,19 @@ void rayGeneration() {
     uint2 imageSize;
     radianceImage.GetDimensions(imageSize.x, imageSize.y);
 
-    if (any(DispatchRaysIndex().xy * SPARSE_TILE_SIZE >= imageSize)) // origin of tile outside image
+    uint index = DispatchRaysIndex().x;
+    if (index >  min(pc->sparsePixels.count, SPARSE_PIXEL_CAPACITY))
         return;
 
-    // Choose one pixel per tile, including partial tiles at right/bottom edges.
-    float2 samplePos = pickSparsePixel(imageSize);
+    SparsePixel px = pc->sparsePixels.pixels[index];
+    uint2 pixel = uint2(px.x, px.y);
 
-    seed = pcg2(uint2(samplePos)) ^ pcg(pc.totalFrames);
+    if (any(pixel >= imageSize))
+        return;
+
+    float2 samplePos = float2(pixel);
+
+    seed = pcg2(pixel) ^ pcg(pc.totalFrames);
 
     RayDesc ray;
     {
@@ -73,10 +79,8 @@ void rayGeneration() {
         float2 ndc = float2((samplePos.x - imageSizeFloat.x / 2.f) / (imageSizeFloat.x / 2.f), (imageSizeFloat.y / 2.f - samplePos.y) / (imageSizeFloat.y / 2.f));
         float3 dir = normalize(pc.camForward + pc.camRight * tan(pc.fov / 2.f) * ndc.x * aspect + pc.camUp * tan(pc.fov / 2.f) * ndc.y);
 
-        float2 lensSample = toDiskConcentric(float2(rand(), rand()));
-        //Get the direction of the ray by finding the point on the focus plane, subtracting the point on the lens we're sampling from, and normalizing
-        ray.Origin = pc.camPos + pc.camUp * lensSample.x * pc.lensRadius + pc.camRight * lensSample.y * pc.lensRadius;
-        ray.Direction = normalize(pc.camPos + dir * pc.focusDist / dot(dir, pc.camForward) - ray.Origin);
+        ray.Origin = pc.camPos; 
+        ray.Direction = dir;
     }
     ray.TMin = EPSILON; // Avoid self-intersection
     ray.TMax = INFINITY;

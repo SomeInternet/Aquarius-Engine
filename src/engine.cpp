@@ -943,6 +943,10 @@ void Engine::createSharcBuffers() {
 void Engine::updateSharc(VkCommandBuffer commandBuffer) {
 	auto &configBuffer = getCurrFrame()._sharcConfigBuffer;
 
+	auto& sparsePixelBuffer = getCurrFrame()._sparsePixelBuffer;
+	const auto* pixels = static_cast<const SparsePixelList*>(sparsePixelBuffer.info.pMappedData);
+	const uint32_t rayCount = pixels->count;
+
 	PushDataSharc push{};
 	push.pathtracer = _pcpt;
 	push.hashEntriesAddress = _sharcHashEntries.address;
@@ -958,8 +962,7 @@ void Engine::updateSharc(VkCommandBuffer commandBuffer) {
 
 	// Sparse pathtracing dispatch
 	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_sharcUpdateRayGenerationRegion, &_sharcUpdateMissRegion, &_sharcUpdateHitRegion, &_sharcUpdateCallRegion,
-		(_renderExtent.width + SHARC_UPDATE_TILE_SIZE - 1) / SHARC_UPDATE_TILE_SIZE,
-		(_renderExtent.height + SHARC_UPDATE_TILE_SIZE - 1) / SHARC_UPDATE_TILE_SIZE, 1);
+		rayCount, 1, 1);
 }
 
 void Engine::initPipelineResolve() {
