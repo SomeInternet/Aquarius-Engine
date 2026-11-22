@@ -8,52 +8,92 @@
 #include "sampling.slang"
 #include "bindings.slang"
 #include "hashmap.slang"
-// SHARC 
+// SHARC
+
+// Primary hit read from the raster G-buffer. The reconstruction pass traces
+// only the bounce that follows this hit.
+struct RasterPrimaryHit {
+    bool valid;
+    bool hasBounce;
+    float viewDepth;
+    float roughness;
+    float pdf;
+    float3 position;
+    float3 cameraDir;
+    float3 normal;
+    float3 directLight;
+    float3 throughput;
+    float3 bounceOrigin;
+    float3 bounceDir;
+};
+
+float3 pinholeCameraDirection(float2 samplePos, float2 imageSize) {
+    float aspect = imageSize.x / imageSize.y;
+    float2 ndc = float2((samplePos.x - imageSize.x / 2.f) / (imageSize.x / 2.f), (imageSize.y / 2.f - samplePos.y) / (imageSize.y / 2.f));
+    return normalize(pc.camForward + pc.camRight * tan(pc.fov / 2.f) * ndc.x * aspect + pc.camUp * tan(pc.fov / 2.f) * ndc.y);
+}
+
+// Placeholder. Rasterization will write view-ray t into depthImage, and the
+// primary normal and roughness into normalRoughnessImage. Direct light and the
+// sampled bounce need the rest of that G-buffer, so those fields stay empty.
+RasterPrimaryHit loadRasterPrimaryHit(uint2 pixel, float2 imageSize) {
+    RasterPrimaryHit primary = {};
+    primary.cameraDir = pinholeCameraDirection(float2(pixel) + 0.5f, imageSize);
+
+    primary.viewDepth = depthImage[pixel].x;
+    primary.valid = primary.viewDepth > 0.f && primary.viewDepth < INFINITY;
+    primary.position = pc.camPos + primary.cameraDir * primary.viewDepth;
+
+    float4 packedNormal = normalRoughnessImage[pixel];
+    primary.normal = packedNormal.xyz;
+    primary.roughness = packedNormal.w;
+
+    primary.directLight = float3(0.f);
+    primary.throughput = float3(1.f);
+    primary.pdf = 0.f;
+    primary.hasBounce = false;
+    primary.bounceOrigin = primary.position + primary.normal * EPSILON;
+    primary.bounceDir = float3(0.f);
+    return primary;
+}
 
 [shader("raygeneration")]
 void rayGeneration() {
     seed = pcg2(DispatchRaysIndex().xy) ^ pcg(pc.totalFrames);
 
-    float2 samplePos = (float2)DispatchRaysIndex().xy;
     float2 imageSize = (float2)DispatchRaysDimensions().xy;
+    uint2 pixel = DispatchRaysIndex().xy;
 
-    samplePos += float2(rand(), rand()); //Add jitter for anti-aliasing
+    RasterPrimaryHit primary = loadRasterPrimaryHit(pixel, imageSize);
 
-    RayDesc ray;
-    {
-        float aspect = imageSize.x / imageSize.y;
-        float2 ndc = float2((samplePos.x - imageSize.x / 2.f) / (imageSize.x / 2.f), (imageSize.y / 2.f - samplePos.y) / (imageSize.y / 2.f));
-        float3 dir = normalize(pc.camForward + pc.camRight * tan(pc.fov / 2.f) * ndc.x * aspect + pc.camUp * tan(pc.fov / 2.f) * ndc.y);
-
-        float2 lensSample = toDiskConcentric(float2(rand(), rand()));
-        //Get the direction of the ray by finding the point on the focus plane, subtracting the point on the lens we're sampling from, and normalizing
-        ray.Origin = pc.camPos + pc.camUp * lensSample.x * pc.lensRadius + pc.camRight * lensSample.y * pc.lensRadius;
-        ray.Direction = normalize(pc.camPos + dir * pc.focusDist / dot(dir, pc.camForward) - ray.Origin);
-    }
-    ray.TMin = EPSILON; // Avoid self-intersection
-    ray.TMax = INFINITY;
-
-    float3 throughput = float3(1.f);
-    float3 accumulatedLight = float3(0.f);
-    float prevBsdfPdf = 0.f; // 0 when no light was sampled at the previous vertex (camera ray), so hitting a light gets the full weight
-
-    float prevRoughness = 1.f;
+    float3 throughput = primary.throughput;
+    float3 accumulatedLight = primary.directLight;
+    float prevBsdfPdf = primary.pdf; // 0 until the raster primary supplies a BSDF sample
+    float prevRoughness = primary.roughness;
     uint depth = 0; // track bounces (sharc)
-    
+
     #if SHARC_QUERY
         SharcParameters params = createSharcParams(pc.camPos, sharcConfigBuffer[0], sharcHashEntries, sharcAccumulation, sharcResolved, sharcLockBuffer);
     #endif
 
-    HitPayload payload = {};
     float3 cachedRadiance = float3(0.f);
     bool hashMapQueried = false;
-    float3 dir = float3(0.f); // view dir of the first indirect hit
+    float3 dir = primary.bounceDir; // incoming direction of the reconstruction ray
 
-    for (uint i = 0; i < 2; ++i) {
-        depth = i;
+    // The camera ray is gone. This trace is the first indirect hit.
+    if (primary.valid && primary.hasBounce) {
+        depth = 1;
+
+        RayDesc ray;
+        ray.Origin = primary.bounceOrigin;
+        ray.Direction = primary.bounceDir;
+        ray.TMin = EPSILON;
+        ray.TMax = INFINITY;
+
+        HitPayload payload = {};
+        payload.gBufferWritten = true; // the raster pass owns the primary G-buffer
         payload.seed = seed;
 
-        //For SER
         HitObject hitObject = HitObject::TraceRay(tlas, 0, 0xFF, 0, 0, 0, ray, payload);
         ReorderThread(hitObject);
         HitObject::Invoke<HitPayload>(tlas, hitObject, payload);
@@ -61,8 +101,7 @@ void rayGeneration() {
 
         if (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) {
             bool found = false;
-            if (!i && hitObject.IsHit() && (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags)) {
-
+            if (hitObject.IsHit()) {
                 float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
                 if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
                 pc.heatMapLod, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
@@ -70,16 +109,8 @@ void rayGeneration() {
                 }
             }
             if (!found) cachedRadiance = float3(0.f);
-            break;
-        }
-
-
-        // Temp, visualize second-hit samples from hashmap queries
-        if (!i) dir = payload.rayDir;
-
-        if (i && !hashMapQueried && hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
+        } else if (hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
             hashMapQueried = true;
-            uint address;
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
             bool found = false;
             for(int j = MIN_LOD; j <= MAX_LOD; ++j) {
@@ -91,17 +122,15 @@ void rayGeneration() {
             }
             if (!found) cachedRadiance = float3(0.f);
 
-            // Attenuate the cached radiance by the throughput of the first and second hits
-            if ((EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) == 0) {
-                cachedRadiance *= throughput;
-                cachedRadiance = select(isnan(cachedRadiance), float3(0.f), cachedRadiance);
-            }
+            // The cached tail already includes the bounce BSDF. Scale by the primary throughput.
+            cachedRadiance *= throughput;
+            cachedRadiance = select(isnan(cachedRadiance), float3(0.f), cachedRadiance);
         }
 
-        // SHARC QUERY/RENDER stage integration
-        // we not considering the first (direct) bounce, if cache hit we use cache and terminate
+        // SHARC is sampled only when the ORCA lookup missed. One bounce, so a SHARC hit ends the path.
+        bool shadedBySharc = false;
 #if SHARC_QUERY
-        if (!hashMapQueried && (pc.flags & EngineStateFlags::SHARC) && hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
+        if ((EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) == 0 && !hashMapQueried && (pc.flags & EngineStateFlags::SHARC) && hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
             float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
             float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, params.hashGridParameters), params.hashGridParameters);
             // cannot be shorter than voxel length
@@ -121,42 +150,22 @@ void rayGeneration() {
             bool getSuccess = SharcGetCachedRadiance(params, hitData, cacheData, false);
             if (lengthCheck && widthCheck && getSuccess) {
                 accumulatedLight += throughput * cacheData;
-                break;
-            } 
+                shadedBySharc = true;
+            }
         }
 #endif
 
-        if (hitObject.IsHit()) accumulatedLight += throughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
+        if ((EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) == 0 && !shadedBySharc) {
+            if (hitObject.IsHit()) accumulatedLight += throughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
 
-        //A negative blue channel means the path ended, on an emitter or the environment
-        if (!hitObject.IsHit() || payload.throughput.b < 0.f) {
-            payload.throughput.b *= -1.f;
-            //MIS weight of the BSDF sample against the chance of light sampling having picked the same point (payload.pdf)
-            float misWeight = prevBsdfPdf > 0.f ? powerHeuristic(1, prevBsdfPdf, 1, payload.pdf) : 1.f;
-            accumulatedLight += throughput * payload.throughput.rgb * misWeight;
-            break;
+            // A negative blue channel means the path ended, on an emitter or the environment
+            if (!hitObject.IsHit() || payload.throughput.b < 0.f) {
+                payload.throughput.b *= -1.f;
+                // MIS weight of the BSDF sample against the chance of light sampling having picked the same point (payload.pdf)
+                float misWeight = prevBsdfPdf > 0.f ? powerHeuristic(1, prevBsdfPdf, 1, payload.pdf) : 1.f;
+                accumulatedLight += throughput * payload.throughput.rgb * misWeight;
+            }
         }
-
-        // Direct and first indirect light are counted above; the hashmap covers the rest of the path
-        if (hashMapQueried) break;
-
-        //A pdf of 0 means we passed straight through an alpha-cut surface, so the throughput and pdf carry over
-        if (payload.pdf > 0.f) {
-            float3 weight = payload.throughput.rgb / payload.pdf;
-            throughput *= select(isnan(weight), float3(0.f), weight);
-            prevBsdfPdf = payload.pdf;
-            prevRoughness = payload.roughness;
-        }
-
-        // RR
-        if (i > 2) {
-            float q = clamp(max(throughput.x, max(throughput.y, throughput.z)), .05f, 1.f);
-            if (rand() >= q) break;
-            throughput /= q;
-        }
-
-        ray.Origin = payload.rayOrigin;
-        ray.Direction = payload.rayDir;
     }
 
     if (pc.flags & EngineStateFlags::SHARC_HEATMAP) {
