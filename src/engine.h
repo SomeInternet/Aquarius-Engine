@@ -23,6 +23,9 @@ struct FrameResources {
 	VkSemaphore _swapChainSemaphore{ VK_NULL_HANDLE }; //Wait to perform rendering operations on the GPU until the swap chain semaphore is signalled
 	VkFence _renderFence{ VK_NULL_HANDLE }; //Wait to record the command buffer until the fence is signalled
 	AllocatedBuffer _sharcConfigBuffer;
+
+	//buffers for sparse pixel paths, each frame has its own buffer
+	AllocatedBuffer _sparsePixelBuffer{};
 };
 
 struct VkbData {
@@ -210,7 +213,7 @@ private:
 	AllocatedBuffer _sharcAccumulation;
 	AllocatedBuffer _sharcResolved;
 	AllocatedBuffer _sharcLockBuffer; // One uint32_t per hash entry; 0 = unlocked.
-
+	
 	glm::vec3 _sharcCameraPositionPrev{ 0.f };
 	bool _sharcCameraInitialized{ false };
 	VkSemaphore _sharcSemaphore{ VK_NULL_HANDLE };
@@ -268,6 +271,8 @@ private:
 	void updateSharc(VkCommandBuffer commandBuffer);
 	void resolveSharc(VkCommandBuffer commandBuffer);
 	void downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap);
+
+	void createSparsePixelBuffers();
 
 	void initGPUHashMaps();
 
