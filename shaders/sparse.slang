@@ -140,10 +140,12 @@ void rayGeneration() {
             else if (surfaceHitCount >= 2)
             {
                 // Radiance past the first indirect hit
-                if (payload.throughput.b < 0.f) {
+                if (payload.throughput.b < 0.f && payload.throughput.z != INVALID_HIT) {
                     float3 emitted = float3(payload.throughput.rg, -payload.throughput.b);
                     float misWeight = prevBsdfPdf > 0.f ? powerHeuristic(1, prevBsdfPdf, 1, payload.pdf) : 1.f;
                     orcaRadiance += orcaThroughput * emitted * misWeight;
+                } else if (payload.throughput.z == INVALID_HIT) {
+                    orcaRadiance = payload.throughput;
                 } else {
                     orcaRadiance += orcaThroughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
                 }
@@ -194,7 +196,7 @@ void rayGeneration() {
     // Path terminus: cache the radiance into the view dir and pos of the first indirect hit,
     // and record the new finest slot for downrez
     // if (surfaceHitCount >= 2 && length(orcaRadiance) > 0.f)
-    if (surfaceHitCount >= 2) {
+    if (surfaceHitCount >= 2 && orcaRadiance.z != INVALID_HIT) {
         uint address;
         HashMapResult result = populate(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer,
                                         pc.hashMap->childAddressBuffer, NUM_HASH_MAP_ENTRIES, indirectHitDir, indirectHitPos,
@@ -335,8 +337,8 @@ void closestHit(inout UpdateHitPayload payload, in BuiltInTriangleIntersectionAt
 
         bool valid = sampleWi(wo, pbr, rand, xi, wi);
         if (valid) evalCookTorrance(wo, wi, pbr, payload.throughput, payload.pdf);
-        if (!valid || payload.pdf <= 0.f) {
-            payload.throughput = float3(0, 0, -EPSILON);
+        if (!valid || payload.pdf <= 0.f) { //Invalid hit
+            payload.throughput = float3(0, 0, INVALID_HIT);
             payload.pdf = 0.f;
             return;
         }
