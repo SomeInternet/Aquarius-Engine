@@ -165,4 +165,52 @@ namespace init {
 
         return renderInfo;
     }
+
+
+    constexpr VkPipelineShaderStageCreateInfo pipelineShaderStageCreateInfo(VkShaderStageFlagBits stage,
+        VkShaderModule shaderModule,
+        const char *entry = "main") {
+        VkPipelineShaderStageCreateInfo info{};
+
+        info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        info.pNext = nullptr;
+        info.stage = stage;
+        info.module = shaderModule;
+        info.pName = entry;
+        return info;
+    }
+
+    constexpr VkRenderingAttachmentInfo attachmentInfo(VkImageView view, VkClearValue *clear, VkImageLayout layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+        VkRenderingAttachmentInfo colorAttachment{};
+
+        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAttachment.pNext = nullptr;
+        colorAttachment.imageView = view;
+        colorAttachment.imageLayout = layout;
+        colorAttachment.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear) {
+            colorAttachment.clearValue = *clear;
+        }
+
+        return colorAttachment;
+    }
+
+    //Render target for depth testing
+    constexpr VkRenderingAttachmentInfo depthAttachmentInfo(VkImageView view,
+        VkImageLayout layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, 
+        VkAttachmentLoadOp loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, VkAttachmentStoreOp storeOp = VK_ATTACHMENT_STORE_OP_STORE) {
+        VkRenderingAttachmentInfo depthAttachment{};
+
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.pNext = nullptr;
+
+        depthAttachment.imageView = view;
+        depthAttachment.imageLayout = layout;
+        depthAttachment.loadOp = loadOp;
+        depthAttachment.storeOp = storeOp;
+        depthAttachment.clearValue.depthStencil.depth = 1.f;
+
+        return depthAttachment;
+    }
 };

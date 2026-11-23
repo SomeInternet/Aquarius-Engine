@@ -2,6 +2,7 @@
 //Macros
 #define MAX_BOUNCES 10
 #define EPSILON 0.001f
+#define INVALID_HIT -0.00031415f
 #define PI 3.1415926535897932384626433832795028841971f
 #define INFINITY 0x1.fffffep+127f
 
@@ -130,6 +131,18 @@ enum EngineStateFlags : uint32_t {
     GPU_HASH_MAP_HEATMAP = 1 << 4
 };
 
+struct CameraData {
+    float4x4 currViewProj;
+    float4x4 prevViewProj;
+
+    float3 camPos;
+    float3 camForward;
+    float3 camRight;
+    float3 camUp;
+
+    float fov;
+};
+
 struct PushConstantsPathtracer {
     float3 camPos;
     float3 camForward;
@@ -153,6 +166,40 @@ struct PushConstantsPathtracer {
 
     SparsePixelList *sparsePixels;
 };
+
+struct VkInstance {
+    float4 rows[3];
+    uint4 padding;
+};
+
+inline float3 instanceTransformPoint(VkInstance inst, float3 p) {
+    float4 p4 = float4(p, 1.f);
+    return float3(dot(inst.rows[0], p4), dot(inst.rows[1], p4), dot(inst.rows[2], p4));
+}
+
+inline float3 instanceTransformDir(VkInstance inst, float3 d) {
+    return float3(dot(inst.rows[0].xyz, d), dot(inst.rows[1].xyz, d), dot(inst.rows[2].xyz, d));
+}
+
+inline float3 instanceTransformNormal(VkInstance inst, float3 n) {
+    float3 c0 = float3(inst.rows[0].x, inst.rows[1].x, inst.rows[2].x);
+    float3 c1 = float3(inst.rows[0].y, inst.rows[1].y, inst.rows[2].y);
+    float3 c2 = float3(inst.rows[0].z, inst.rows[1].z, inst.rows[2].z);
+
+    float3 a = cross(c1, c2);
+    float3 res = a * n.x + cross(c2, c0) * n.y + cross(c0, c1) * n.z;
+    return dot(c0, a) < 0.f ? -res : res;
+}
+
+inline float4 instanceToClip(float4x4 viewProj, VkInstance inst, float3 p, out float3 worldPos) {
+    worldPos = instanceTransformPoint(inst, p);
+    return mul(viewProj, float4(worldPos, 1.f));
+}
+
+inline float3 fallbackTangent(float3 n) {
+    return abs(n.x) > abs(n.y) ? float3(-n.z, 0.f, n.x) / sqrt(n.x * n.x + n.z * n.z) :
+        float3(0.f, n.z, -n.y) / sqrt(n.y * n.y + n.z * n.z);
+}
 
 struct HitPayload {
     float3 throughput = {};
@@ -272,8 +319,7 @@ inline PointInfo getPointInfo(uint subMeshIdx, uint primitiveIdx, float3 barycen
     res.nor = normalize(res.nor);
 
     if (length(tangent) == 0.f) { //When we have to compute the tangent
-        tangent = abs(res.nor.x) > abs(res.nor.y) ? float3(-res.nor.z, 0.f, res.nor.x) / sqrt(res.nor.x * res.nor.x + res.nor.z * res.nor.z) :
-            float3(0.f, res.nor.z, -res.nor.y) / sqrt(res.nor.y * res.nor.y + res.nor.z * res.nor.z);
+        tangent = fallbackTangent(res.nor);
     }
     res.tan = normalize(tangent - res.nor * dot(res.nor, tangent)); // TODO: might have to change this for left-handed spaces
     return res;

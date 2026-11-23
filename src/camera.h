@@ -6,6 +6,18 @@
 constexpr float EPSILON = 0.000001f;
 constexpr float PI = 3.1415926535897932384626433832795028841971f;
 
+struct CameraData {
+	glm::mat4 currViewProj;
+	glm::mat4 prevViewProj;
+
+	glm::vec3 camPos;
+	glm::vec3 camForward;
+	glm::vec3 camRight;
+	glm::vec3 camUp;
+
+	float fov;
+};
+
 class Camera {
 public:
 	void pan(float x, float y);
@@ -13,6 +25,7 @@ public:
 	void zoom(float z);
 
 	void toPushConstantsPathtracer(PushConstantsPathtracer &pc);
+	void toCameraData(CameraData &cd, float aspect);
 
 	const glm::mat4 &getView();
 	const glm::mat4 &getRot();

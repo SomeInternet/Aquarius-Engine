@@ -53,6 +53,18 @@ void Camera::toPushConstantsPathtracer(PushConstantsPathtracer &pc) {
 	pc.fov = glm::radians(fov);
 }
 
+void Camera::toCameraData(CameraData &cd, float aspect) {
+	cd.prevViewProj = cd.currViewProj;
+	cd.currViewProj = glm::perspective(glm::radians(fov), aspect, .1f, 1000.f) * getView();
+
+	glm::mat3 rot = glm::transpose(glm::mat3(getRot()));
+	cd.camForward = -rot[2];
+	cd.camRight = rot[0];
+	cd.camUp = rot[1];
+	cd.camPos = origin - radius * cd.camForward;
+	cd.fov = glm::radians(fov);
+}
+
 void Camera::processEvent(SDL_Event e) {
 	if (e.type == SDL_EVENT_MOUSE_MOTION) {
 		if (leftDown) orbit(-e.motion.xrel, -e.motion.yrel);
