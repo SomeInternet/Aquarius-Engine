@@ -134,6 +134,7 @@ void Engine::initVulkan() {
 		features11.storageBuffer16BitAccess = true; //Allows us to access our half-precision octahedral-projected normals and tangents
 		features11.uniformAndStorageBuffer16BitAccess = true; //SHaRC resolved records store float16 radiance
 		features11.storagePushConstant16 = true;
+		features11.shaderDrawParameters = true;
 
 		VkPhysicalDeviceVulkan12Features features12{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
 		features12.bufferDeviceAddress = true;
@@ -378,18 +379,22 @@ void Engine::createDLSSImages() {
 
 	_diffuseAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_diffuseAlbedoImageInfo);
 	_specularAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_specularAlbedoImageInfo);
-	_normalRoughnessImage = _allocator.createImage(extent, normalRoughnessFormat, debugViewUsage, false, &_normalRoughnessImageInfo);
-	_viewDepthImage = _allocator.createImage(extent, depthFormat, debugViewUsage, false, &_viewDepthImageInfo);
-	_motionVectorImage = _allocator.createImage(extent, motionVectorsFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_motionVectorImageInfo);
+	constexpr VkImageUsageFlags gbufferUsage = debugViewUsage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+	_normalRoughnessImage = _allocator.createImage(extent, normalRoughnessFormat, gbufferUsage, false, &_normalRoughnessImageInfo);
+	_viewDepthImage = _allocator.createImage(extent, depthFormat, gbufferUsage, false, &_viewDepthImageInfo);
+	_motionVectorImage = _allocator.createImage(extent, motionVectorsFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, false, &_motionVectorImageInfo);
 	_specHitDistImage = _allocator.createImage(extent, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_specHitDistImageInfo);
 	_dlssOutputImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_dlssOutputImageInfo);
-	_orcaAlbedoImage = _allocator.createImage(extent, albedoMetallicFormat, debugViewUsage, false, &_orcaAlbedoImageInfo);
+	_orcaAlbedoImage = _allocator.createImage(extent, albedoMetallicFormat, gbufferUsage, false, &_orcaAlbedoImageInfo);
+	_posImage = _allocator.createImage(extent, posFormat, gbufferUsage, false, nullptr);
+	_depthImage = _allocator.createImage(extent, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_depthImageInfo);
 	//TODO: Create additional images for DLSS (might want too look into the depth of field guide)
 
 	//The shaders write these as storage images, so keep them in GENERAL
 	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
 		for (VkImage image : { _diffuseAlbedoImage.image, _specularAlbedoImage.image, _normalRoughnessImage.image, _viewDepthImage.image,
-			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image }) {
+			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image, _posImage.image }) {
 			util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 		}
 		});
@@ -404,6 +409,8 @@ void Engine::destroyDLSSImages() {
 	_allocator.destroyImage(_specHitDistImage);
 	_allocator.destroyImage(_dlssOutputImage);
 	_allocator.destroyImage(_orcaAlbedoImage);
+	_allocator.destroyImage(_posImage);
+	_allocator.destroyImage(_depthImage);
 	//_allocator.destroyImage(_postInputImage);
 }
 
@@ -457,6 +464,9 @@ void Engine::initSyncStructures() {
 	for (auto &frame : _frameResources) {
 		VK_CHECK(vkCreateFence(_device, &fenceCreateInfo, nullptr, &frame._renderFence));
 		VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &frame._swapChainSemaphore));
+
+		//Host-visible so the camera can be rewritten every frame; per-frame so we never overwrite data a frame in flight is reading
+		frame._cameraBuffer = _allocator.createBuffer(sizeof(CameraData), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
 	}
 
 	//Render complete semaphores are signalled when the rendering operations are done and the image is ready to present
@@ -474,6 +484,7 @@ void Engine::initSyncStructures() {
 		for (auto &frame : _frameResources) {
 			vkDestroyFence(_device, frame._renderFence, nullptr);
 			vkDestroySemaphore(_device, frame._swapChainSemaphore, nullptr);
+			_allocator.destroyBuffer(frame._cameraBuffer);
 		}
 
 		for (VkSemaphore semaphore : _renderCompleteSemaphores) {
@@ -1351,6 +1362,11 @@ void Engine::initPipelineRaster() {
 	VK_CHECK(vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &rasterPipelineInfo, nullptr, &_pipelineRaster));
 
 	vkDestroyShaderModule(_device, moduleRaster, nullptr);
+
+	_deletionQueue.push([this]() {
+		vkDestroyPipeline(_device, _pipelineDepth, nullptr);
+		vkDestroyPipeline(_device, _pipelineRaster, nullptr);
+		});
 }
 
 void Engine::initPipelinePost() {
@@ -1537,9 +1553,9 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	VkViewport viewport{};
 	viewport.x = 0;
-	viewport.y = 0;
-	viewport.width = _renderExtent.width;
-	viewport.height = _renderExtent.height;
+	viewport.y = static_cast<float>(_renderExtent.height);
+	viewport.width = static_cast<float>(_renderExtent.width);
+	viewport.height = -static_cast<float>(_renderExtent.height);
 	viewport.minDepth = 0;
 	viewport.maxDepth = 1;
 
@@ -1550,6 +1566,11 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	scissor.extent.height = _renderExtent.height;
 
 	FrameResources &currFrame = getCurrFrame();
+
+	//Shift last frame's view-projection into prev, compute the new one, and upload to this frame's buffer
+	_camera.toCameraData(_cameraData, float(_renderExtent.width) / float(_renderExtent.height));
+	memcpy(currFrame._cameraBuffer.info.pMappedData, &_cameraData, sizeof(CameraData));
+	_allocator.flush(currFrame._cameraBuffer);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineDepth);
 
@@ -1572,6 +1593,8 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 
 	//Clear the depth image
 	VkRenderingInfo depthRenderInfo{.sType = VK_STRUCTURE_TYPE_RENDERING_INFO};
+	depthRenderInfo.renderArea = { { 0, 0 }, _renderExtent };
+	depthRenderInfo.layerCount = 1;
 	depthRenderInfo.colorAttachmentCount = 0;
 	depthRenderInfo.pColorAttachments = nullptr;
 	depthRenderInfo.pDepthAttachment = &depthAttachment;
@@ -1582,8 +1605,32 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 
 	//Perform depth draw loop
 	//Maybe add a helper for scene that takes in a lambda...?
-	VkDeviceAddress prevInstanceBuffer = _scene.instanceBuffers[(_totalFrames + 1) % (FRAMES_IN_FLIGHT + 1)].address;
+	VkDeviceAddress prevInstanceBuffer = _scene.instanceBuffers[(_totalFrames + FRAMES_IN_FLIGHT) % (FRAMES_IN_FLIGHT + 1)].address;
 	VkDeviceAddress currInstanceBuffer = _scene.instanceBuffers[_totalFrames % (FRAMES_IN_FLIGHT + 1)].address;
+
+	//Perform raster draw loop
+	for (uint32_t instanceIdx = 0; instanceIdx < _scene.instances.size(); ++instanceIdx) {
+		const auto &instance = _scene.instances[instanceIdx];
+		const auto &mesh = _scene.meshes[instance.mesh];
+
+		for (const auto &subMesh : mesh.subMeshes) {
+			vkCmdBindIndexBuffer(commandBuffer, subMesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+			DepthPushConstants pc{};
+			pc.cam = currFrame._cameraBuffer.address;
+			pc.instanceIdx = instanceIdx;
+			pc.posBuffer = subMesh.posBuffer.address;
+			pc.instances = currInstanceBuffer;
+
+			VkPushDataInfoEXT pushData{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
+			pushData.offset = 0;
+			pushData.data = { &pc, sizeof(pc) };
+
+			_dispatchTable.cmdPushDataEXT(commandBuffer, &pushData);
+
+			vkCmdDrawIndexed(commandBuffer, subMesh.indexCount, 1, 0, 0, 0);
+		}
+	}
 
 	vkCmdEndRendering(commandBuffer);
 
@@ -1591,14 +1638,14 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 
 	//We gotta set a barrier to make sure the depth pass has written the depth before we depth test
 	VkImageMemoryBarrier2 preRasterDepthBarrier{ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
-	preRasterDepthBarrier.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+	preRasterDepthBarrier.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
 	preRasterDepthBarrier.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 	preRasterDepthBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
 	preRasterDepthBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
 	preRasterDepthBarrier.image = _depthImage.image;
 	preRasterDepthBarrier.subresourceRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_DEPTH_BIT);
 	preRasterDepthBarrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-	preRasterDepthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL;
+	preRasterDepthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
 
 	//Set a barrier to make sure the gbuffer is not in use
 	VkImageMemoryBarrier2 preRasterAttachmentBarrier{ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
@@ -1607,7 +1654,7 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	preRasterAttachmentBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 	preRasterAttachmentBarrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
 	preRasterAttachmentBarrier.subresourceRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
-	preRasterAttachmentBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	preRasterAttachmentBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	preRasterAttachmentBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
 	std::array<VkImageMemoryBarrier2, RASTER_GBUFFER_SIZE + 1> preRasterAttachmentBarriers;
@@ -1628,7 +1675,7 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 
 	vkCmdPipelineBarrier2(commandBuffer, &preRasterDependency);
 
-	VkRenderingAttachmentInfo rasterDepthAttachment = init::depthAttachmentInfo(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL,
+	VkRenderingAttachmentInfo rasterDepthAttachment = init::depthAttachmentInfo(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
 		VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_NONE);
 
 	//Clear to zero so pixels no geometry covers don't keep last frame's data
@@ -1644,15 +1691,43 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	};
 
 	VkRenderingInfo rasterRenderInfo{ .sType = VK_STRUCTURE_TYPE_RENDERING_INFO };
-	rasterRenderInfo.colorAttachmentCount = 0;
-	rasterRenderInfo.pColorAttachments = nullptr;
-	rasterRenderInfo.pDepthAttachment = &depthAttachment;
+	rasterRenderInfo.renderArea = { { 0, 0 }, _renderExtent };
+	rasterRenderInfo.layerCount = 1;
+	rasterRenderInfo.colorAttachmentCount = colorAttachmentInfos.size();
+	rasterRenderInfo.pColorAttachments = colorAttachmentInfos.data();
+	rasterRenderInfo.pDepthAttachment = &rasterDepthAttachment;
 
 	vkCmdBeginRendering(commandBuffer, &rasterRenderInfo);
 	vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 	vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
 	//Perform raster draw loop
+	for (uint32_t instanceIdx = 0; instanceIdx < _scene.instances.size(); ++instanceIdx) {
+		const auto &instance = _scene.instances[instanceIdx];
+		const auto &mesh = _scene.meshes[instance.mesh];
+
+		for (const auto &subMesh : mesh.subMeshes) {
+			vkCmdBindIndexBuffer(commandBuffer, subMesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+			RasterPushConstants pc{};
+			pc.cam = currFrame._cameraBuffer.address;
+			pc.instanceIdx = instanceIdx;
+			pc.posBuffer = subMesh.posBuffer.address;
+			pc.vertBuffer = subMesh.vertexBuffer.address;
+			pc.instances = currInstanceBuffer;
+			pc.prevInstances = prevInstanceBuffer;
+			pc.materialIdx = subMesh.materialIdx;
+			pc.materials = _scene.materialBuffer.address;
+
+			VkPushDataInfoEXT pushData{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
+			pushData.offset = 0;
+			pushData.data = { &pc, sizeof(pc) };
+
+			_dispatchTable.cmdPushDataEXT(commandBuffer, &pushData);
+
+			vkCmdDrawIndexed(commandBuffer, subMesh.indexCount, 1, 0, 0, 0);
+		}
+	}
 
 	vkCmdEndRendering(commandBuffer);
 
@@ -1734,7 +1809,7 @@ void Engine::draw() {
 		auto now = std::chrono::steady_clock::now();
 		auto time = std::chrono::duration<float>(now - _start).count();
 
-		int frameIdx = _totalFrames % FRAMES_IN_FLIGHT;
+		uint32_t frameIdx = _totalFrames % (FRAMES_IN_FLIGHT + 1);
 
 		loader::updateScene(_device, _allocator, _scene, _dispatchTable, time, _totalFrames);
 
@@ -1776,6 +1851,8 @@ void Engine::draw() {
 		vkCmdPipelineBarrier2(commandBuffer, &dependency);
 	}
 	_frameNum = 0;
+
+	rasterize(commandBuffer);
 
 	// Previous frame's trace may still be touching these shared buffers
 	VkMemoryBarrier2 preClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
@@ -2018,10 +2095,13 @@ void Engine::init() {
 	initWindow();
 	initVulkan();
 	createSwapChain(WIDTH, HEIGHT);
+
+	//The allocator must exist before initSyncStructures, which creates the per-frame camera buffers
+	_allocator.init(_instance, _physicalDevice, _device);
+
 	initCommandResources();
 	initSyncStructures();
 
-	_allocator.init(_instance, _physicalDevice, _device);
 	_allocator.setCommandInfo(_queue, _immCommandBuffer, _immFence);
 
 	updateRenderExtent();
@@ -2045,12 +2125,16 @@ void Engine::init() {
 	createSparsePixelBuffers();
 
 	initPipelinePathtracer();
+	initPipelineRaster();
 	initPipelineUpdate();
 	initPipelineDownrez();
 	initPipelineResolve();
 	initPipelinePost();
 
 	initImgui();
+
+	//Warm start the camera data so the first raster frame has prevViewProj == currViewProj (zero camera motion)
+	_camera.toCameraData(_cameraData, float(_renderExtent.width) / float(_renderExtent.height));
 
 	_start = std::chrono::steady_clock::now();
 }

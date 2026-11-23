@@ -26,7 +26,7 @@ struct FrameResources {
 	VkFence _renderFence{ VK_NULL_HANDLE }; //Wait to record the command buffer until the fence is signalled
 	AllocatedBuffer _sharcConfigBuffer;
 
-	AllocatedBuffer _cameraData{};
+	AllocatedBuffer _cameraBuffer{};
 
 	//buffers for sparse pixel paths, each frame has its own buffer
 	AllocatedBuffer _sparsePixelBuffer{};
@@ -84,7 +84,7 @@ constexpr int FRAMES_IN_FLIGHT = 3;
 //8: ORCA albedo (+metallic?)
 //9: TODO: post
 #define albedoMetallicFormat VK_FORMAT_R16G16B16A16_SFLOAT //Albedo-metallic
-#define posFormat VK_FORMAT_R32G32B32_SFLOAT //Pos
+#define posFormat VK_FORMAT_R32G32B32A32_SFLOAT //Pos
 #define normalRoughnessFormat VK_FORMAT_R16G16B16A16_SFLOAT //Normal-roughness
 #define motionVectorsFormat VK_FORMAT_R16G16_SFLOAT //Motion vectors
 #define depthFormat VK_FORMAT_R32_SFLOAT //Depth
@@ -173,6 +173,7 @@ private:
 	bool _showGui{ true };
 	ImGuiIO *_io{ nullptr };
 	Camera _camera{};
+	CameraData _cameraData{}; //Persists across frames so prevViewProj carries last frame's matrix
 
 	EngineDebugView _debugView{ EngineDebugView::PATHTRACED };
 
@@ -233,6 +234,7 @@ private:
 	VkImageViewCreateInfo _dlssOutputImageInfo{};
 	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
+	VkImageViewCreateInfo _depthImageInfo{};
 
 	//GPU hash maps
 	std::vector<HashMap> _hashMaps;

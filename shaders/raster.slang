@@ -7,7 +7,7 @@ struct RasterPushConstants {
     VkInstance *instances;
     VkInstance *prevInstances;
 
-    float4 *posBuffer;
+    float3 *posBuffer;
     Vertex *vertBuffer;
 
     int materialIdx;
@@ -19,7 +19,7 @@ struct GBufferFSInput {
     float3 worldPos;
     float3 nor;
     float3 tan;
-    half2 uv;
+    float2 uv;
     float4 currClip;
     float4 prevClip;
 };
@@ -54,7 +54,7 @@ GBufferFSInput vertMain(uint32_t idx: SV_VertexID) {
     // Do the usual projection
     GBufferFSInput output = {};
     VkInstance inst = pc.instances[pc.instanceIdx];
-    float3 objPos = pc.posBuffer[idx].xyz;
+    float3 objPos = pc.posBuffer[idx];
     Vertex v = pc.vertBuffer[idx];
 
     output.fragPos = instanceToClip(pc.cam->currViewProj, inst, objPos, output.worldPos);
@@ -63,11 +63,11 @@ GBufferFSInput vertMain(uint32_t idx: SV_VertexID) {
 
     output.nor = instanceTransformNormal(inst, fromOctahedral(v.nor));
     output.tan = instanceTransformDir(inst, fromOctahedral(v.tan));
-    output.uv = v.uv;
+    output.uv = float2(v.uv);
     return output;
 }
 
-inline float4 sampleTex(int imgIdx, int sampIdx, half2 uv, float4 defaultValue) {
+inline float4 sampleTex(int imgIdx, int sampIdx, float2 uv, float4 defaultValue) {
     return (imgIdx != -1) ? sceneImages[NonUniformResourceIndex(imgIdx)].SampleLevel(samplers[NonUniformResourceIndex(sampIdx + 1)], uv, 0.f) : defaultValue;
 }
 

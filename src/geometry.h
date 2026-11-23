@@ -131,6 +131,7 @@ struct Scene {
 	std::vector<glm::mat4> prevNodeTransforms;
 	std::vector<glm::mat4> nodeTransforms;
 	std::vector<Animation> animations;
+	std::vector<Instance> instances;
 
 	AccelerationStructure tlas{};
 

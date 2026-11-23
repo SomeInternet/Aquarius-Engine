@@ -448,7 +448,7 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY);
 
             newSubMesh.indexBuffer = allocator.uploadBuffer(indices.data(), indices.size() * sizeof(uint32_t),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, VMA_MEMORY_USAGE_GPU_ONLY);
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, VMA_MEMORY_USAGE_GPU_ONLY);
 
             newMesh.subMeshes.push_back(newSubMesh);
 
@@ -711,6 +711,8 @@ Scene loader::loadScene(VkDevice &device, Allocator &allocator, const std::strin
     for (auto &instance : instances) {
         if (newScene.meshes[instance.mesh].subMeshes.empty()) continue; //Don't create an instance of a mesh that doesn't have triangles
 
+        newScene.instances.push_back(instance);
+
         VkAccelerationStructureInstanceKHR vkInstance{};
         newScene.instanceNodes.push_back(instance.node);
 
@@ -856,8 +858,8 @@ void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, v
     }
 
     //Propagate changes to the instance buffer
-    auto *instanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(scene.instanceBuffers[frameNum % (FRAMES_IN_FLIGHT + 1)].info.pMappedData);
-    auto *prevInstanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(scene.instanceBuffers[(frameNum - 1) % (FRAMES_IN_FLIGHT + 1)].info.pMappedData);
+    AllocatedBuffer &currInstanceBuffer = scene.instanceBuffers[frameNum % (FRAMES_IN_FLIGHT + 1)];
+    auto *instanceBuffer = static_cast<VkAccelerationStructureInstanceKHR *>(currInstanceBuffer.info.pMappedData);
     for (int i = 0; i < scene.instanceNodes.size(); ++i) {
         if (scene.instanceNodes[i] < 0) continue;
 
@@ -865,7 +867,7 @@ void loader::updateScene(VkDevice &device, Allocator &allocator, Scene &scene, v
         glm::mat4 transformRowMajor = glm::transpose(scene.nodeTransforms[scene.instanceNodes[i]]);
         memcpy(&instanceBuffer[i].transform, glm::value_ptr(transformRowMajor), sizeof(VkTransformMatrixKHR));
     }
-    allocator.flush(scene.instanceBuffers[frameNum]);
+    allocator.flush(currInstanceBuffer);
 }
 
 void loader::destroyScene(VkDevice &device, Allocator &allocator, Scene &scene, vkb::DispatchTable &dispatchTable) {

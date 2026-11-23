@@ -298,19 +298,6 @@ void closestHit(inout HitPayload payload, in BuiltInTriangleIntersectionAttribut
         }
     }
 
-    //Write out information to the shared DLSS/ORCA GBuffer images
-    if (!payload.gBufferWritten) {
-        payload.gBufferWritten = true;
-        diffuseAlbedoImage[DispatchRaysIndex().xy] = float4(gAlbedo, pbr.metallicRoughness.x);
-        specularAlbedoImage[DispatchRaysIndex().xy] = float4(gSpecular, 1.f);
-        normalRoughnessImage[DispatchRaysIndex().xy] = float4(worldNor, pbr.metallicRoughness.y);
-        depthImage[DispatchRaysIndex().xy] = RayTCurrent();
-        // TODO: Specular hit dist image via raycast...?
-        // TODO: Motion vectors
-        orcaAlbedoImage[DispatchRaysIndex().xy] = pbr.color;
-
-    }
-
     float3 wi;
     {
         //TODO: Optimize
@@ -339,15 +326,6 @@ void miss(inout HitPayload payload) {
     payload.throughput = hdrImage.SampleLevel(samplers[0], uv, 0.f).rgb;
     payload.pdf = envLightPdf(pc.sceneData, uv);
     payload.throughput.b = min(-payload.throughput.b, -EPSILON);
-
-    if (!payload.gBufferWritten) {
-        payload.gBufferWritten = true;
-        diffuseAlbedoImage[DispatchRaysIndex().xy] = float4(0.f);
-        specularAlbedoImage[DispatchRaysIndex().xy] = float4(0.f);
-        normalRoughnessImage[DispatchRaysIndex().xy] = float4(0.f);
-        orcaAlbedoImage[DispatchRaysIndex().xy] = float4(float3(0.f), 1.f);
-        depthImage[DispatchRaysIndex().xy] = INFINITY;
-    }
 }
 
 [shader("anyhit")]

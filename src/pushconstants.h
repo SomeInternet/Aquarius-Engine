@@ -126,7 +126,7 @@ struct DepthPushConstants {
 };
 
 struct RasterPushConstants {
-	VkDeviceAddress *cam;
+	VkDeviceAddress cam;
 	VkDeviceAddress materials;
 	VkDeviceAddress instances;
 	VkDeviceAddress prevInstances;
