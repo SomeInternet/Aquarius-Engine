@@ -1513,18 +1513,15 @@ void Engine::draw() {
 	memcpy(configBuffer.info.pMappedData, &config, sizeof(config));
 	_allocator.flush(configBuffer);
 
-	// only do update resolve when sharc on
 	uint32_t flags = 0;
 	if (_sharcEnabled) flags |= SHARC;
 	if (_sharcHeatmap) flags |= SHARC_HEATMAP;
 	if (_hashMapHeatMap) flags |= EngineStateFlags::GPU_HASH_MAP_HEAT_MAP;
 	_pcpt.flags = static_cast<EngineStateFlags>(flags);
 
-	if (_sharcEnabled) {
-		updateSharc(commandBuffer);
-		downrezHashMap(commandBuffer, hashMap);
-		resolveSharc(commandBuffer);
-	}
+	updateSharc(commandBuffer);
+	downrezHashMap(commandBuffer, hashMap);
+	if (_sharcEnabled) resolveSharc(commandBuffer);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelinePathtracer);
 

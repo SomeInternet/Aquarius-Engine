@@ -1,6 +1,6 @@
 // Holy shit, I think I love slang
 #define SHARC_UPDATE 1
-#define SHARC_QUERY 0
+#define SHARC_QUERY 1
 
 #define HASH_GRID_COMPACT 0
 #define HASH_GRID_ENABLE_64_BIT_ATOMICS 0
@@ -85,8 +85,8 @@ void rayGeneration() {
     ray.TMin = EPSILON; // Avoid self-intersection
     ray.TMax = INFINITY;
 
-    // All sparse paths populate ORCA; ~67%  update SHaRC
-    bool updateSharc = rand() < (2.f / 3.f);
+    // All sparse paths populate ORCA; ~67% update SHaRC when enabled.
+    bool updateSharc = rand() < (2.f / 3.f) && (pc.flags & EngineStateFlags::SHARC) != 0;
 
     // SHARC init
     SharcParameters sharcParameters = createSharcParams(pc.camPos, sharcConfigBuffer[0], sharcHashEntries, sharcAccumulation, sharcResolved, sharcLockBuffer);
@@ -131,6 +131,28 @@ void rayGeneration() {
             break;
         }
 
+        // Terminal hit: if the path is at the bounce limit, surface is valid, path continues, and SHARC is enabled, then query the SHaRC cache.
+        bool atBounceLimit = (i + 1 == pc.maxBounces);
+        bool continuingSurface = payload.surfaceValid != 0 && payload.throughput.b >= 0.f && payload.pdf > 0.f;
+
+        if (atBounceLimit && continuingSurface && surfaceHitCount >= 2 && (pc.flags & EngineStateFlags::SHARC) != 0)
+        {
+            SharcHitData terminalHit = {};
+            terminalHit.positionWorld = payload.positionWorld;
+            terminalHit.normalWorld = payload.normalWorld;
+
+            float3 tailRadiance = float3(0.f);
+            if (SharcGetCachedRadiance(sharcParameters, terminalHit, tailRadiance, false))
+            {
+                orcaRadiance += orcaThroughput * tailRadiance;
+
+                if (updateSharc)
+                    SharcUpdateMiss(sharcParameters, sharcState, tailRadiance);
+
+                break;
+            }
+        }
+
         // Valid hit
         // ORCA skips direct lighting at the first indirect hit itself.
         if (payload.surfaceValid != 0)
@@ -161,7 +183,7 @@ void rayGeneration() {
             sharcHitData.positionWorld = payload.positionWorld;
             sharcHitData.normalWorld = payload.normalWorld;
 
-            // Update ORCA even if SHARC doesn't, since ORCA needs to accumulate radiance past the first indirect hit.
+            // Update ORCA even if SHARC stops updating, since ORCA needs to accumulate radiance past the first indirect hit.
             updateSharc = SharcUpdateHit(sharcParameters, sharcState, sharcHitData, payload.sharcLocalRadiance, rand());
             // if (!SharcUpdateHit(sharcParameters, sharcState, sharcHitData, payload.sharcLocalRadiance, rand()))
             //     break;
