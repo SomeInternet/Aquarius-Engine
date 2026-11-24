@@ -10,51 +10,120 @@
 #include "hashmap.slang"
 // SHARC
 
-// Primary hit read from the raster G-buffer. The reconstruction pass traces
-// only the bounce that follows this hit.
+// Primary hit read from the raster G-buffer instead of tracing primary rays.
+// World position is reconstructed from the camera ray and the stored ray length.
 struct RasterPrimaryHit {
-    bool valid;
-    bool hasBounce;
-    float viewDepth;
-    float roughness;
-    float pdf;
-    float3 position;
+    float4 albedoMetallic; // orcaAlbedoImage
+    float3 pos; // calculated using camPos + cameraDir * depth
+    float4 normalRoughness; // normalRoughnessImage
+    float2 motionVectors; // motionVectorImage
+    float depth; // depthImage
+
     float3 cameraDir;
-    float3 normal;
+    float3 normal; // derived from normalRoughnessImage
+    float roughness; // derived from normalRoughnessImage
+    bool valid; // whether the pixel has a real rasterized surface(aka if that pixel is on a surface)
+
+    // Filled by samplePrimaryBounce. The G-buffer does not store a light sample or a bounce.
     float3 directLight;
     float3 throughput;
+    float pdf;
+    bool hasBounce;
     float3 bounceOrigin;
     float3 bounceDir;
 };
 
+// given pixel on the image, returns 3D world-space direction vector from camera's pinhole through that pixel on the virtual image plane 
 float3 pinholeCameraDirection(float2 samplePos, float2 imageSize) {
     float aspect = imageSize.x / imageSize.y;
     float2 ndc = float2((samplePos.x - imageSize.x / 2.f) / (imageSize.x / 2.f), (imageSize.y / 2.f - samplePos.y) / (imageSize.y / 2.f));
     return normalize(pc.camForward + pc.camRight * tan(pc.fov / 2.f) * ndc.x * aspect + pc.camUp * tan(pc.fov / 2.f) * ndc.y);
 }
 
-// Placeholder. Rasterization will write view-ray t into depthImage, and the
-// primary normal and roughness into normalRoughnessImage. Direct light and the
-// sampled bounce need the rest of that G-buffer, so those fields stay empty.
 RasterPrimaryHit loadRasterPrimaryHit(uint2 pixel, float2 imageSize) {
     RasterPrimaryHit primary = {};
     primary.cameraDir = pinholeCameraDirection(float2(pixel) + 0.5f, imageSize);
 
-    primary.viewDepth = depthImage[pixel].x;
-    primary.valid = primary.viewDepth > 0.f && primary.viewDepth < INFINITY;
-    primary.position = pc.camPos + primary.cameraDir * primary.viewDepth;
+    primary.albedoMetallic = orcaAlbedoImage[pixel];
+    primary.normalRoughness = normalRoughnessImage[pixel];
+    primary.motionVectors = motionVectorImage[pixel].xy;
+    primary.depth = depthImage[pixel].x;
 
-    float4 packedNormal = normalRoughnessImage[pixel];
-    primary.normal = packedNormal.xyz;
-    primary.roughness = packedNormal.w;
+    primary.normal = primary.normalRoughness.xyz;
+    primary.roughness = primary.normalRoughness.w;
+    // Uncovered pixels are cleared to zero.
+    primary.valid = primary.depth > 0.f && primary.depth < INFINITY; // if pixel is on a surface, the depth is positive and finite distance 
+    primary.pos = pc.camPos + primary.cameraDir * primary.depth;
 
     primary.directLight = float3(0.f);
     primary.throughput = float3(1.f);
     primary.pdf = 0.f;
     primary.hasBounce = false;
-    primary.bounceOrigin = primary.position + primary.normal * EPSILON;
+    primary.bounceOrigin = primary.pos + primary.normal * EPSILON;
     primary.bounceDir = float3(0.f);
     return primary;
+}
+
+// The raster pass replaced the camera ray, so the primary surface is shaded here.
+// Similar to closestHit: a light sample, then a BSDF sample for the next ray.
+// The G-buffer has no IOR or transmission, so this is an opaque surface at the glTF default IOR.
+void samplePrimaryBounce(inout RasterPrimaryHit primary) {
+    if (!primary.valid) return;
+
+    float3 worldNor = primary.normal;
+    float norLen = length(worldNor);
+    if (norLen <= EPSILON) return;
+    worldNor /= norLen; // normalizes the normal 
+    // cameraDir points from the eye toward the hit. A front face points back at the eye.
+    if (dot(worldNor, primary.cameraDir) > 0.f) worldNor = -worldNor;
+    primary.normal = worldNor;
+
+    PointInfo pointInfo = {};
+    pointInfo.nor = worldNor;
+    pointInfo.tan = fallbackTangent(worldNor);
+
+    float3 wo = -mulNor(pointInfo, primary.cameraDir);
+    if (wo.z < EPSILON) return;
+
+    PBR pbr = {};
+    pbr.color = float4(primary.albedoMetallic.xyz, 1.f);
+    pbr.metallicRoughness = float2(clamp(primary.albedoMetallic.w, 0.f, 1.f), max(primary.roughness, EPSILON));
+    pbr.transmissiveness = 0.f;
+    pbr.etaA = 1.f;
+    pbr.etaB = 1.5f;
+    // sample 1 light from hit position, evaluate BSDF toward it 
+    {
+        LightSample ls = sampleLight(pc.sceneData, primary.pos);
+        if (ls.pr > 0.f) {
+            float3 wiLight = normalize(mulNor(pointInfo, ls.dir.xyz));
+            if (wiLight.z != 0.f) {
+                float3 bsdf;
+                float bsdfPdf;
+                float3 diffuseAlbedo = float3(0.f);
+                float3 specularAlbedo = float3(0.f);
+                evalCookTorrance2(wo, wiLight, pbr, bsdf, diffuseAlbedo, specularAlbedo, bsdfPdf);
+
+                if (any(bsdf > 0.f) && shadowRayCast(primary.pos + worldNor * sign(wiLight.z) * EPSILON, ls.dir.xyz, ls.dir.w - 2.f * EPSILON))
+                    primary.directLight = bsdf * ls.radiance * powerHeuristic(1, ls.pr, 1, bsdfPdf) / ls.pr;
+            }
+        }
+    }
+
+    // sampleWi picks random outgoing direction, and evaluates that direction's BSDF value and prob 
+    float2 xi = float2(rand(), rand());
+    float lobe = rand();
+    float3 wi;
+    bool valid = sampleWi(wo, pbr, lobe, xi, wi);
+    float3 bsdf = float3(0.f);
+    float pdf = 0.f;
+    if (valid) evalCookTorrance(wo, wi, pbr, bsdf, pdf);
+    if (!valid || pdf <= 0.f) return;
+
+    primary.throughput = bsdf / pdf;
+    primary.pdf = pdf;
+    primary.hasBounce = true;
+    primary.bounceDir = normalize(mulNorTranspose(pointInfo, wi));
+    primary.bounceOrigin = primary.pos + worldNor * sign(wi.z) * EPSILON;
 }
 
 [shader("raygeneration")]
@@ -65,10 +134,11 @@ void rayGeneration() {
     uint2 pixel = DispatchRaysIndex().xy;
 
     RasterPrimaryHit primary = loadRasterPrimaryHit(pixel, imageSize);
+    samplePrimaryBounce(primary);
 
     float3 throughput = primary.throughput;
     float3 accumulatedLight = primary.directLight;
-    float prevBsdfPdf = primary.pdf; // 0 until the raster primary supplies a BSDF sample
+    float prevBsdfPdf = primary.pdf;
     float prevRoughness = primary.roughness;
     uint depth = 0; // track bounces (sharc)
 
