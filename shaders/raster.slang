@@ -108,7 +108,7 @@ GBufferFSOutput fragMain(GBufferFSInput input) {
     float3 viewDir = pc.cam->camPos - input.worldPos;
     output.depth = length(viewDir);
 
-    if (length(mat.emission) > 0.f) {
+    if (length(mat.emission.rgb) > 0.f) {
         output.albedoEmission = float4(mat.emission.xyz * sampleTex(mat.emissionImgIdx, mat.emissionSamplerIdx, input.uv, float4(1.f)).xyz, mat.emission.w);
     } else { // Score computation
         //

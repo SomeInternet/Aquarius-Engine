@@ -1354,7 +1354,7 @@ void Engine::initPipelineRaster() {
 	std::array<VkPipelineColorBlendAttachmentState, colorAttachmentFormats.size()> colorBlendAttachments;
 	colorBlendAttachments.fill(colorBlendAttachment);
 
-	VkPipelineColorBlendStateCreateInfo colorBlending{};
+	VkPipelineColorBlendStateCreateInfo colorBlending{.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
 	colorBlending.logicOpEnable = VK_FALSE; //Don't use bitwise color blending operations
 	colorBlending.logicOp = VK_LOGIC_OP_COPY;
 	colorBlending.attachmentCount = colorBlendAttachments.size();
