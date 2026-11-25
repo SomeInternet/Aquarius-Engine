@@ -1,6 +1,6 @@
 // SHARC defs
-#define SHARC_QUERY 1
-#define SHARC_UPDATE 1
+#define SHARC_QUERY 0
+#define SHARC_UPDATE 0
 
 //Holy shit, I think I love slang
 #include "bsdf.slang"
@@ -8,7 +8,6 @@
 #include "sampling.slang"
 #include "bindings.slang"
 #include "hashmap.slang"
-// SHARC 
 
 [shader("raygeneration")]
 void rayGeneration() {
@@ -39,10 +38,6 @@ void rayGeneration() {
 
     float prevRoughness = 1.f;
     uint depth = 0; // track bounces (sharc)
-    
-    #if SHARC_QUERY
-        SharcParameters params = createSharcParams(pc.camPos, sharcConfigBuffer[0], sharcHashEntries, sharcAccumulation, sharcResolved, sharcLockBuffer);
-    #endif
 
     HitPayload payload = {};
     float3 cachedRadiance = float3(0.f);
@@ -97,34 +92,6 @@ void rayGeneration() {
                 cachedRadiance = select(isnan(cachedRadiance), float3(0.f), cachedRadiance);
             }
         }
-
-        // SHARC QUERY/RENDER stage integration
-        // we not considering the first (direct) bounce, if cache hit we use cache and terminate
-#if SHARC_QUERY
-        if (!hashMapQueried && (pc.flags & EngineStateFlags::SHARC) && hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
-            float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-            float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, params.hashGridParameters), params.hashGridParameters);
-            // cannot be shorter than voxel length
-            bool lengthCheck = payload.hitLen > voxelSize * sqrt(3.f);
-
-            // cone spread eq from SHARC guide:
-            // 2.0∗ray.length∗sqrt(0.5∗a2/(1−a2)
-            float roughness = prevRoughness;
-            float alphaSq = roughness * roughness * roughness * roughness; // a is material SQUARED
-            bool widthCheck = (2.0f * payload.hitLen * sqrt(0.5f * alphaSq / max(1.0f - alphaSq, 1e-6f))) > voxelSize;
-
-            SharcHitData hitData;
-            hitData.positionWorld = hitPos;
-            hitData.normalWorld = payload.hitNor;
-
-            float3 cacheData;
-            bool getSuccess = SharcGetCachedRadiance(params, hitData, cacheData, false);
-            if (lengthCheck && widthCheck && getSuccess) {
-                accumulatedLight += throughput * cacheData;
-                break;
-            } 
-        }
-#endif
 
         if (hitObject.IsHit()) accumulatedLight += throughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
 

@@ -994,6 +994,10 @@ void Engine::createSharcBuffers() {
 void Engine::updateSharc(VkCommandBuffer commandBuffer) {
 	auto &configBuffer = getCurrFrame()._sharcConfigBuffer;
 
+	auto& sparsePixelBuffer = getCurrFrame()._sparsePixelBuffer;
+	const auto* pixels = static_cast<const SparsePixelList*>(sparsePixelBuffer.info.pMappedData);
+	const uint32_t rayCount = pixels->count;
+
 	PushDataSharc push{};
 	push.pathtracer = _pcpt;
 	push.hashEntriesAddress = _sharcHashEntries.address;
@@ -1009,8 +1013,7 @@ void Engine::updateSharc(VkCommandBuffer commandBuffer) {
 
 	// Sparse pathtracing dispatch
 	_dispatchTable.cmdTraceRaysKHR(commandBuffer, &_sharcUpdateRayGenerationRegion, &_sharcUpdateMissRegion, &_sharcUpdateHitRegion, &_sharcUpdateCallRegion,
-		(_renderExtent.width + SHARC_UPDATE_TILE_SIZE - 1) / SHARC_UPDATE_TILE_SIZE,
-		(_renderExtent.height + SHARC_UPDATE_TILE_SIZE - 1) / SHARC_UPDATE_TILE_SIZE, 1);
+		rayCount, 1, 1);
 }
 
 void Engine::initPipelineResolve() {
@@ -1947,18 +1950,15 @@ void Engine::draw() {
 	memcpy(configBuffer.info.pMappedData, &config, sizeof(config));
 	_allocator.flush(configBuffer);
 
-	// only do update resolve when sharc on
 	uint32_t flags = 0;
 	if (_sharcEnabled) flags |= SHARC;
 	if (_sharcHeatmap) flags |= SHARC_HEATMAP;
 	if (_hashMapHeatMap) flags |= EngineStateFlags::GPU_HASH_MAP_HEAT_MAP;
 	_pcpt.flags = static_cast<EngineStateFlags>(flags);
 
-	if (_sharcEnabled) {
-		updateSharc(commandBuffer);
-		downrezHashMap(commandBuffer, hashMap);
-		resolveSharc(commandBuffer);
-	}
+	updateSharc(commandBuffer);
+	downrezHashMap(commandBuffer, hashMap);
+	if (_sharcEnabled) resolveSharc(commandBuffer);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, _pipelinePathtracer);
 
