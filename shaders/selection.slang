@@ -42,13 +42,41 @@ RWTexture2D<float4> engineImages[];
 [[vk::push_constant]]
 PushConstantsSelection pc;
 
-// to score (heurstic) + sum
+// HELPER FUNCTIONS =========================
+
+// reconstruct view dir from pc info
+inline float3 viewDirFromPixel(uint2 px) {};
+
+// compute pixel's score based on material prop (albedo, metallic, roughness), normal
+inline float computeScore(uint2 px, float3 albedo, float metallic, float roughness, float3 normal) {};
+
+// TODO: probably helpers for FAST noise
+
+// SCORE + SUM PASS ============================
+
+groupshared float gsWaveSums[BLOCK_SIZE];
+
 [shader("compute")]
 [numthreads(BLOCK_X, BLOCK_Y, 1)]
-void scorePass(uint2 px: SV_DispatchThreadID, uint groupIdx: SV_GroupIndex) {
-    if (any (p >= pc.imageSize)) {
-        //Add information to buffer
+void scorePass(uint2 px: SV_DispatchThreadID, uint groupIndex: SV_GroupIndex) {
+
+    float score = 0.0f;
+    if (all(px < pc.imageSize)) {
+        float depth = engineImages[IMG_VIEW_DEPTH][px].x;
+        if (depth > 0.0f) {
+            float4 albedoMetallic = engineImages[IMG_ALBEDO_METALLIC][px];
+            float4 normalRoughness = engineImages[IMG_NORMAL_ROUGHNESS][px];
+
+            float3 normal = normalize(normalRoughness.xyz);
+            float3 viewDir = -viewDirFromPixel(px);
+
+            score = computeScore(px, albedoMetallic.xyz, albedoMetallic.w, normalRoughness.w, normal);
+        }
+        engineImages[IMG_SCORE][px] = float4(score, 0.0f, 0.0f, 0.0f); // uhh is there a way to prevent this
     }
+
+    // TODO: sum things
+
 }
 
 // to balance, pick, write to spb
@@ -58,4 +86,17 @@ void pickPass(uint2 px: SV_DispatchThreadID) {
     if (any(px >= pc.imageSize)) {
         return;
     }
-}
+
+    float score = engineImages[IMG_SCORE][px].x;
+    if (score <= 0.0f) {
+        return;
+    }
+
+    float scale = 1.0f;
+    if (pc.applyBalancing != 0) {
+        float total = float(pc.state->scoreSumIntified) / INTIFIED_SCORE_SCALE;
+        scale = total > 0.0f ? pc.budget / total : 0.0f;
+    };
+
+    // 
+};

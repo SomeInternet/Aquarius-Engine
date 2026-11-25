@@ -1455,30 +1455,34 @@ void Engine::updateSelection(VkCommandBuffer commandBuffer) {
 	auto &frame = getCurrFrame();
 
 	// memory barrier before reset in case prev frame is still using the buffers
-	VkMemoryBarrier2 beforeResetBarrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
-	beforeResetBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-	beforeResetBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-	beforeResetBarrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-	beforeResetBarrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-	VkDependencyInfo beforeRestDep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
-	beforeRestDep.memoryBarrierCount = 1;
-	beforeRestDep.pMemoryBarriers = &beforeResetBarrier;
-	vkCmdPipelineBarrier2(commandBuffer, &beforeRestDep);
+	{
+		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+		barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+		VkDependencyInfo dep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		dep.memoryBarrierCount = 1;
+		dep.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(commandBuffer, &dep);
+	}
 
 	// reset score total & list count
 	vkCmdFillBuffer(commandBuffer, frame._selectionStateBuffer.buffer, 0, sizeof(SelectionState), 0);
 	vkCmdFillBuffer(commandBuffer, frame._sparsePixelBuffer.buffer, offsetof(SparsePixelList, count), sizeof(uint32_t), 0);
 
 	// fills visible to pass A
-	VkMemoryBarrier2 makeVisibleToABarrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
-	makeVisibleToABarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-	makeVisibleToABarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-	makeVisibleToABarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-	makeVisibleToABarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-	VkDependencyInfo makeVisibleToADep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
-	makeVisibleToADep.memoryBarrierCount = 1;
-	makeVisibleToADep.pMemoryBarriers = &makeVisibleToABarrier;
-	vkCmdPipelineBarrier2(commandBuffer, &makeVisibleToADep);
+	{
+		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+		barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+		VkDependencyInfo dep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		dep.memoryBarrierCount = 1;
+		dep.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(commandBuffer, &dep);
+	}
 
 	// filling push constants (used for both passes)
 	PushConstantsSelection pc{};
@@ -1503,15 +1507,18 @@ void Engine::updateSelection(VkCommandBuffer commandBuffer) {
 	vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
 
 	// pass A results visible to pass B
-	VkMemoryBarrier2 makeVisibleToBBarrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };	
-	makeVisibleToBBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-	makeVisibleToBBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-	makeVisibleToBBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-	makeVisibleToBBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-	VkDependencyInfo makeVisibleToBDep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
-	makeVisibleToBDep.memoryBarrierCount = 1;
-	makeVisibleToBDep.pMemoryBarriers = &makeVisibleToBBarrier;
-	vkCmdPipelineBarrier2(commandBuffer, &makeVisibleToBDep);
+	{
+		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };	
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+
+		VkDependencyInfo dep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		dep.memoryBarrierCount = 1;
+		dep.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(commandBuffer, &dep);
+	}
 
 	// dispatch pass B (balance, pixel picking, write)
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineSelectionPick);
@@ -1519,15 +1526,18 @@ void Engine::updateSelection(VkCommandBuffer commandBuffer) {
 	vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
 
 	// sparsepixelbuffer visible to path tracer
-	VkMemoryBarrier2 makeVisibleToPTBarrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
-	makeVisibleToPTBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-	makeVisibleToPTBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-	makeVisibleToPTBarrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-	makeVisibleToPTBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-	VkDependencyInfo makeVisibleToPTDep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
-	makeVisibleToPTDep.memoryBarrierCount = 1;
-	makeVisibleToPTDep.pMemoryBarriers = &makeVisibleToPTBarrier;
-	vkCmdPipelineBarrier2(commandBuffer, &makeVisibleToPTDep);
+	{
+		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+		barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+		barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+
+		VkDependencyInfo dep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+		dep.memoryBarrierCount = 1;
+		dep.pMemoryBarriers = &barrier;
+		vkCmdPipelineBarrier2(commandBuffer, &dep);
+	}
 }
 
 void Engine::initGPUHashMaps() {
