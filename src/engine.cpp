@@ -36,6 +36,9 @@ static_assert(sizeof(PushConstantsDownrez) == 32);
 static_assert(offsetof(PushConstantsDownrez, childAdded) == 8);
 static_assert(offsetof(PushConstantsDownrez, currLayer) == 16);
 static_assert(offsetof(PushConstantsDownrez, nextLayer) == 24);
+static_assert(offsetof(PushConstantsSelection, imageSize) == 24);
+static_assert(offsetof(PushConstantsSelection, budget) == 36);
+static_assert(sizeof(PushConstantsSelection) == 64);
 static_assert(sizeof(SparsePixel) == 4);
 static_assert(offsetof(SparsePixelList, pixels) == 4);
 static_assert(sizeof(SparsePixelList) == 4 + 4 * SPARSE_PIXEL_CAPACITY);
@@ -389,12 +392,13 @@ void Engine::createDLSSImages() {
 	_orcaAlbedoImage = _allocator.createImage(extent, albedoMetallicFormat, gbufferUsage, false, &_orcaAlbedoImageInfo);
 	_posImage = _allocator.createImage(extent, posFormat, gbufferUsage, false, nullptr);
 	_depthImage = _allocator.createImage(extent, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_depthImageInfo);
+	_scoreImage = _allocator.createImage(extent, VK_FORMAT_R16_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false, &_scoreImageInfo);
 	//TODO: Create additional images for DLSS (might want too look into the depth of field guide)
 
 	//The shaders write these as storage images, so keep them in GENERAL
 	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
 		for (VkImage image : { _diffuseAlbedoImage.image, _specularAlbedoImage.image, _normalRoughnessImage.image, _viewDepthImage.image,
-			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image, _posImage.image }) {
+			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image, _scoreImage.image, _posImage.image }) {
 			util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 		}
 		});
@@ -411,6 +415,7 @@ void Engine::destroyDLSSImages() {
 	_allocator.destroyImage(_orcaAlbedoImage);
 	_allocator.destroyImage(_posImage);
 	_allocator.destroyImage(_depthImage);
+	_allocator.destroyImage(_scoreImage);
 	//_allocator.destroyImage(_postInputImage);
 }
 
@@ -423,6 +428,7 @@ void Engine::initDLSSImageDescriptors() {
 	writeImageDescriptor(6, _specHitDistImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(7, _dlssOutputImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	writeImageDescriptor(8, _orcaAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+	writeImageDescriptor(9, _scoreImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 	_allocator.flush(_imageHeap);
 }
 
@@ -1404,6 +1410,51 @@ void Engine::initPipelinePost() {
 	_deletionQueue.push([this]() {vkDestroyPipeline(_device, _pipelinePost, nullptr); });
 }
 
+void Engine::initPipelineSelection() {
+	VkShaderModule module = util::loadShaderModule("./build/shaders/selection.spv", _device);
+
+	VkDeviceSize imageStride = _imageHeapLayout.stride;
+
+	std::array mappings = {
+		heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0, imageStride),
+	};
+
+	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
+	mappingInfo.mappingCount = mappings.size();
+	mappingInfo.pMappings = mappings.data();
+
+	VkPipelineCreateFlags2CreateInfo flags{ .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO };
+	flags.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+
+	VkPipelineShaderStageCreateInfo shaderStage{ .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+	shaderStage.pNext = &mappingInfo;
+	shaderStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	shaderStage.module = module;
+
+	VkComputePipelineCreateInfo pipelineInfo{ .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+	pipelineInfo.pNext = &flags;
+	pipelineInfo.layout = VK_NULL_HANDLE;
+
+	shaderStage.pName = "scorePass";
+	pipelineInfo.stage = shaderStage;
+	VK_CHECK(vkCreateComputePipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_pipelineSelectionScore));
+
+	shaderStage.pName = "pickPass";
+	pipelineInfo.stage = shaderStage;
+	VK_CHECK(vkCreateComputePipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_pipelineSelectionPick));
+
+	vkDestroyShaderModule(_device, module, nullptr);
+
+	_deletionQueue.push([this]() {
+		vkDestroyPipeline(_device, _pipelineSelectionScore, nullptr);
+		vkDestroyPipeline(_device, _pipelineSelectionPick, nullptr);
+	});
+}
+
+void Engine::updateSelection(VkCommandBuffer commandBuffer) {
+
+}
+
 void Engine::initGPUHashMaps() {
 	for (int i = 0; i < FRAMES_IN_FLIGHT; ++i) _hashMaps.emplace_back(_allocator);
 
@@ -1417,16 +1468,21 @@ void Engine::createSparsePixelBuffers() {
 	for (auto& frame : _frameResources) {
 		frame._sparsePixelBuffer = _allocator.createBuffer(sizeof(SparsePixelList), 
 			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, true);
-
 		
 		memset(frame._sparsePixelBuffer.info.pMappedData, 0, sizeof(SparsePixelList));
-
 		_allocator.flush(frame._sparsePixelBuffer);
+
+		frame._selectionStateBuffer = _allocator.createBuffer(sizeof(SelectionState),
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, true);
+		memset(frame._selectionStateBuffer.info.pMappedData, 0, sizeof(SelectionState));
+		_allocator.flush(frame._selectionStateBuffer);
+
 	}
 
 	_deletionQueue.push([this]() {
 		for (auto& frame : _frameResources)
 			_allocator.destroyBuffer(frame._sparsePixelBuffer);
+			_allocator.destroyBuffer(frame._selectionStateBuffer);
 	});
 }
 
@@ -1853,6 +1909,7 @@ void Engine::draw() {
 	_frameNum = 0;
 
 	rasterize(commandBuffer);
+	updateSelection(commandBuffer); // pixel picking
 
 	// Previous frame's trace may still be touching these shared buffers
 	VkMemoryBarrier2 preClear{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
@@ -2130,6 +2187,7 @@ void Engine::init() {
 	initPipelineDownrez();
 	initPipelineResolve();
 	initPipelinePost();
+	initPipelineSelection();
 
 	initImgui();
 

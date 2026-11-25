@@ -30,6 +30,9 @@ struct FrameResources {
 
 	//buffers for sparse pixel paths, each frame has its own buffer
 	AllocatedBuffer _sparsePixelBuffer{};
+	// for scorePass and pickPass communication (selection.slang)
+	AllocatedBuffer _selectionStateBuffer{};
+
 	//Given we're not accumulating, I think we ought to move a lot of the images here
 	AllocatedImage _diffuseAlbedoImage;
 	AllocatedImage _specularAlbedoImage;
@@ -137,6 +140,9 @@ private:
 	VkPipeline _pipelineDepth;
 	VkPipeline _pipelineRaster;
 
+	VkPipeline _pipelineSelectionScore;
+	VkPipeline _pipelineSelectionPick;
+
 	VkPipeline _pipelinePathtracer;
 	VkPipeline _pipelineSharcUpdate;
 	VkPipeline _pipelineDownrez;
@@ -224,6 +230,7 @@ private:
 	AllocatedImage _posImage;
 	AllocatedImage _postInputImage;
 	AllocatedImage _depthImage;
+	AllocatedImage _scoreImage;
 
 	VkImageViewCreateInfo _diffuseAlbedoImageInfo{};
 	VkImageViewCreateInfo _specularAlbedoImageInfo{};
@@ -235,6 +242,7 @@ private:
 	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 	VkImageViewCreateInfo _depthImageInfo{};
+	VKImageViewCreateInfo _scoreImageInfo{};
 
 	//GPU hash maps
 	std::vector<HashMap> _hashMaps;
@@ -310,6 +318,7 @@ private:
 	void updateSharc(VkCommandBuffer commandBuffer);
 	void resolveSharc(VkCommandBuffer commandBuffer);
 	void downrezHashMap(VkCommandBuffer commandBuffer, HashMap& hashmap);
+	void updateSelection(VkCommandBuffer commandBuffer);
 
 	void createSparsePixelBuffers();
 

@@ -137,3 +137,26 @@ struct RasterPushConstants {
 	int materialIdx;
 	int instanceIdx;
 };
+
+// ==== for scoring & selection (pixel picking heuristics) === 
+// matching defs are in selection.slang 
+
+struct SelectionState {
+	uint32_t scoreSumFixed;
+};
+
+struct PushConstantsSelection {
+	VkDeviceAddress cam;
+	VkDeviceAddress state;
+	VkDeviceAddress sparsePixels;
+
+	uint32_t imageSize[2];
+	uint32_t frameNum;
+
+	float budget;
+	float thresholdRate = 1.0f / 16.0f;
+	float mirrorMaxRate = 1.0f;
+	float roughnessMaxToConsider = 0.4f;
+	uint32_t applySpecularHeuristics = 1;
+	uint32_t applyBalancing = 1;
+};
