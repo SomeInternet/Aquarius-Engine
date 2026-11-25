@@ -371,6 +371,46 @@ void Engine::initRadianceImageDescriptors() {
 	_allocator.flush(_imageHeap);
 }
 
+void Engine::createFrameImages() {
+	VkExtent3D extent = VkExtent3D(_renderExtent.width, _renderExtent.height, 1);
+
+	VkImageUsageFlags debugViewUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	VkImageUsageFlags gbufferUsage = debugViewUsage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+	for (auto &frame : _frameImages) {
+		frame._radianceScoreImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[0], gbufferUsage, false, nullptr);
+		frame._albedoEmissionImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[1], gbufferUsage, false, &frame._albedoEmissionImageInfo);
+		frame._metallicTransmissionIorImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[2], gbufferUsage, false, nullptr);
+		frame._linearDepthImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[3], gbufferUsage, false, &frame._linearDepthImageInfo);
+		frame._normalRoughnessImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[4], gbufferUsage, false, &frame._normalRoughnessImageInfo);
+		frame._motionVectorImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[5], gbufferUsage, false, &frame._motionVectorImageInfo);
+		frame._hardwareDepthImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[6], VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, nullptr);
+
+		//TODO: Initialize other images...
+	}
+
+	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
+		for (auto &frame : _frameImages) {
+			for (VkImage image : { frame._radianceScoreImage.image, frame._albedoEmissionImage.image, frame._metallicTransmissionIorImage.image,
+				frame._linearDepthImage.image, frame._normalRoughnessImage.image, frame._motionVectorImage.image }) {
+				util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+			}
+		}
+		});
+}
+
+void Engine::destroyFrameImages() {
+	for (auto &frame : _frameImages) {
+		_allocator.destroyImage(frame._radianceScoreImage);
+		_allocator.destroyImage(frame._albedoEmissionImage);
+		_allocator.destroyImage(frame._metallicTransmissionIorImage);
+		_allocator.destroyImage(frame._linearDepthImage);
+		_allocator.destroyImage(frame._normalRoughnessImage);
+		_allocator.destroyImage(frame._motionVectorImage);
+		_allocator.destroyImage(frame._hardwareDepthImage);
+	}
+}
+
 void Engine::createDLSSImages() {
 	VkExtent3D extent = VkExtent3D(_renderExtent.width, _renderExtent.height, 1);
 	
@@ -1295,11 +1335,12 @@ void Engine::initPipelineRaster() {
 	VkFormat colorAttachmentFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
 	std::array colorAttachmentFormats = {
-		albedoMetallicFormat,
-		posFormat,
-		normalRoughnessFormat,
-		motionVectorsFormat,
-		depthFormat
+		FRAME_IMAGE_FORMATS[0], //Radiance
+		FRAME_IMAGE_FORMATS[1], //Albedo-emission
+		FRAME_IMAGE_FORMATS[2], //Metallic, emission, IOR
+		FRAME_IMAGE_FORMATS[3], //Linear depth
+		FRAME_IMAGE_FORMATS[4], //Normal-roughness
+		FRAME_IMAGE_FORMATS[5], //Motion vectors
 	};
 
 	renderInfo.colorAttachmentCount = colorAttachmentFormats.size();
@@ -1566,6 +1607,7 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	scissor.extent.height = _renderExtent.height;
 
 	FrameResources &currFrame = getCurrFrame();
+	FrameImages &frameImages = _frameImages[_totalFrames % FRAME_IMAGE_SETS];
 
 	//Shift last frame's view-projection into prev, compute the new one, and upload to this frame's buffer
 	_camera.toCameraData(_cameraData, float(_renderExtent.width) / float(_renderExtent.height));
@@ -1580,7 +1622,7 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	preDepthBarrier.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; //This isn't terribly important here therefore, by the above note
 	preDepthBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
 	preDepthBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-	preDepthBarrier.image = _depthImage.image; //TODO: Change this if we make these per-frame resources
+	preDepthBarrier.image = frameImages._hardwareDepthImage.image;
 	preDepthBarrier.subresourceRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_DEPTH_BIT);
 	preDepthBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; //TODO: See about optimizing this?
 	preDepthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -1589,7 +1631,7 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	preDepthDependency.pImageMemoryBarriers = &preDepthBarrier;
 	vkCmdPipelineBarrier2(commandBuffer, &preDepthDependency);
 
-	VkRenderingAttachmentInfo depthAttachment = init::depthAttachmentInfo(_depthImage.imageView);
+	VkRenderingAttachmentInfo depthAttachment = init::depthAttachmentInfo(frameImages._hardwareDepthImage.imageView);
 
 	//Clear the depth image
 	VkRenderingInfo depthRenderInfo{.sType = VK_STRUCTURE_TYPE_RENDERING_INFO};
@@ -1642,7 +1684,7 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	preRasterDepthBarrier.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 	preRasterDepthBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
 	preRasterDepthBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-	preRasterDepthBarrier.image = _depthImage.image;
+	preRasterDepthBarrier.image = frameImages._hardwareDepthImage.image;
 	preRasterDepthBarrier.subresourceRange = init::imageSubresourceRange(VK_IMAGE_ASPECT_DEPTH_BIT);
 	preRasterDepthBarrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
 	preRasterDepthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
@@ -1660,14 +1702,14 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	std::array<VkImageMemoryBarrier2, RASTER_GBUFFER_SIZE + 1> preRasterAttachmentBarriers;
 	preRasterAttachmentBarriers.fill(preRasterAttachmentBarrier);
 
-	//CHANGE THESE IF WE MAKE THESE PER-FRAME RESOURCES
-	preRasterAttachmentBarriers[0].image = _orcaAlbedoImage.image;
-	preRasterAttachmentBarriers[1].image = _posImage.image;
-	preRasterAttachmentBarriers[2].image = _normalRoughnessImage.image;
-	preRasterAttachmentBarriers[3].image = _motionVectorImage.image;
-	preRasterAttachmentBarriers[4].image = _viewDepthImage.image;
+	preRasterAttachmentBarriers[0].image = frameImages._radianceScoreImage.image;
+	preRasterAttachmentBarriers[1].image = frameImages._albedoEmissionImage.image;
+	preRasterAttachmentBarriers[2].image = frameImages._metallicTransmissionIorImage.image;
+	preRasterAttachmentBarriers[3].image = frameImages._linearDepthImage.image;
+	preRasterAttachmentBarriers[4].image = frameImages._normalRoughnessImage.image;
+	preRasterAttachmentBarriers[5].image = frameImages._motionVectorImage.image;
 
-	preRasterAttachmentBarriers[5] = preRasterDepthBarrier;
+	preRasterAttachmentBarriers[6] = preRasterDepthBarrier;
 
 	VkDependencyInfo preRasterDependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
 	preRasterDependency.imageMemoryBarrierCount = preRasterAttachmentBarriers.size();
@@ -1675,7 +1717,7 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 
 	vkCmdPipelineBarrier2(commandBuffer, &preRasterDependency);
 
-	VkRenderingAttachmentInfo rasterDepthAttachment = init::depthAttachmentInfo(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
+	VkRenderingAttachmentInfo rasterDepthAttachment = init::depthAttachmentInfo(frameImages._hardwareDepthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
 		VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_NONE);
 
 	//Clear to zero so pixels no geometry covers don't keep last frame's data
@@ -1683,11 +1725,12 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	VkClearValue gbufferClear{};
 
 	std::array colorAttachmentInfos = {
-		init::renderingAttachmentInfo(_orcaAlbedoImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
-		init::renderingAttachmentInfo(_posImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
-		init::renderingAttachmentInfo(_normalRoughnessImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
-		init::renderingAttachmentInfo(_motionVectorImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
-		init::renderingAttachmentInfo(_viewDepthImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(frameImages._radianceScoreImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(frameImages._albedoEmissionImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(frameImages._metallicTransmissionIorImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(frameImages._linearDepthImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(frameImages._normalRoughnessImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+		init::renderingAttachmentInfo(frameImages._motionVectorImage.imageView, &gbufferClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
 	};
 
 	VkRenderingInfo rasterRenderInfo{ .sType = VK_STRUCTURE_TYPE_RENDERING_INFO };
@@ -1747,12 +1790,12 @@ void Engine::rasterize(VkCommandBuffer commandBuffer) {
 	std::array<VkImageMemoryBarrier2, RASTER_GBUFFER_SIZE> postRasterAttachmentBarriers;
 	postRasterAttachmentBarriers.fill(postRasterAttachmentBarrier);
 
-	//CHANGE THESE IF WE MAKE THESE PER-FRAME RESOURCES
-	postRasterAttachmentBarriers[0].image = _orcaAlbedoImage.image;
-	postRasterAttachmentBarriers[1].image = _posImage.image;
-	postRasterAttachmentBarriers[2].image = _normalRoughnessImage.image;
-	postRasterAttachmentBarriers[3].image = _motionVectorImage.image;
-	postRasterAttachmentBarriers[4].image = _viewDepthImage.image;
+	postRasterAttachmentBarriers[0].image = frameImages._radianceScoreImage.image;
+	postRasterAttachmentBarriers[1].image = frameImages._albedoEmissionImage.image;
+	postRasterAttachmentBarriers[2].image = frameImages._metallicTransmissionIorImage.image;
+	postRasterAttachmentBarriers[3].image = frameImages._linearDepthImage.image;
+	postRasterAttachmentBarriers[4].image = frameImages._normalRoughnessImage.image;
+	postRasterAttachmentBarriers[5].image = frameImages._motionVectorImage.image;
 
 	VkDependencyInfo postRasterDependency{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
 	postRasterDependency.imageMemoryBarrierCount = postRasterAttachmentBarriers.size();
@@ -1961,12 +2004,13 @@ void Engine::draw() {
 	else {
 		//Blit the selected g-buffer image straight into the swap chain
 		const AllocatedImage *debugImage = nullptr;
+		auto &frameImages = _frameImages[_totalFrames % FRAME_IMAGE_SETS];
 		switch (_debugView) {
-		case EngineDebugView::DIFFUSE_ALBEDO: debugImage = &_diffuseAlbedoImage; break;
-		case EngineDebugView::SPECULAR_ALBEDO: debugImage = &_specularAlbedoImage; break;
-		case EngineDebugView::NORMALS: debugImage = &_normalRoughnessImage; break;
-		case EngineDebugView::DEPTH: debugImage = &_viewDepthImage; break;
-		case EngineDebugView::ORCA_ALBEDO: debugImage = &_orcaAlbedoImage; break;
+		case EngineDebugView::DIFFUSE_ALBEDO: debugImage = &frameImages._diffuseAlbedoImage; break;
+		case EngineDebugView::SPECULAR_ALBEDO: debugImage = &frameImages._specularAlbedoImage; break;
+		case EngineDebugView::NORMALS: debugImage = &frameImages._normalRoughnessImage; break;
+		case EngineDebugView::DEPTH: debugImage = &frameImages._linearDepthImage; break;
+		case EngineDebugView::ORCA_ALBEDO: debugImage = &frameImages._albedoEmissionImage; break;
 		default: break;
 		}
 
@@ -2069,6 +2113,11 @@ void Engine::resize() {
 
 	//Destroy and recreate the radiance image
 	updateRenderExtent();
+
+	destroyFrameImages();
+	createFrameImages();
+
+
 	_allocator.destroyImage(_radianceImage);
 	createRadianceImage();
 	initRadianceImageDescriptors();
@@ -2096,7 +2145,6 @@ void Engine::init() {
 	initVulkan();
 	createSwapChain(WIDTH, HEIGHT);
 
-	//The allocator must exist before initSyncStructures, which creates the per-frame camera buffers
 	_allocator.init(_instance, _physicalDevice, _device);
 
 	initCommandResources();
@@ -2105,6 +2153,7 @@ void Engine::init() {
 	_allocator.setCommandInfo(_queue, _immCommandBuffer, _immFence);
 
 	updateRenderExtent();
+	createFrameImages();
 	createRadianceImage();
 	createDLSSImages();
 	initDescriptorHeaps();
@@ -2187,6 +2236,7 @@ void Engine::cleanup() {
 		if (_envAliasTable.loaded) _allocator.destroyBuffer(_envAliasTable);
 
 		destroySwapChain();
+		destroyFrameImages();
 		destroyDLSSImages();
 		if (_hdrLoaded) _allocator.destroyImage(_hdrImage);
 		_allocator.destroyImage(_radianceImage);
