@@ -50,15 +50,19 @@ struct FrameImages {
 	AllocatedImage _specHitDistImage;
 	AllocatedImage _dlssOutputImage;
 
+	VkImageViewCreateInfo _radianceScoreImageInfo{};
+	VkImageViewCreateInfo _albedoEmissionImageInfo{};
+	VkImageViewCreateInfo _metallicTransmissionIorImageInfo{};
+	VkImageViewCreateInfo _linearDepthImageInfo{};
+	VkImageViewCreateInfo _normalRoughnessImageInfo{};
+	VkImageViewCreateInfo _motionVectorImageInfo{};
+	VkImageViewCreateInfo _hardwareDepthImageInfo{};
+	VkImageViewCreateInfo _postImageInfo{};
+
 	VkImageViewCreateInfo _diffuseAlbedoImageInfo{};
 	VkImageViewCreateInfo _specularAlbedoImageInfo{};
-	VkImageViewCreateInfo _normalRoughnessImageInfo{};
-	VkImageViewCreateInfo _linearDepthImageInfo{};
-	VkImageViewCreateInfo _motionVectorImageInfo{};
 	VkImageViewCreateInfo _specHitDistImageInfo{};
 	VkImageViewCreateInfo _dlssOutputImageInfo{};
-	VkImageViewCreateInfo _albedoEmissionImageInfo{};
-	VkImageViewCreateInfo _postImageInfo{};
 };
 
 struct VkbData {
@@ -93,11 +97,6 @@ constexpr int FRAME_IMAGE_SETS = FRAMES_IN_FLIGHT - 1;
 //7: dlss output
 //8: ORCA albedo (+metallic?)
 //9: TODO: post
-#define albedoMetallicFormat VK_FORMAT_R16G16B16A16_SFLOAT //Albedo-metallic
-#define posFormat VK_FORMAT_R32G32B32A32_SFLOAT //Pos
-#define normalRoughnessFormat VK_FORMAT_R16G16B16A16_SFLOAT //Normal-roughness
-#define motionVectorsFormat VK_FORMAT_R16G16_SFLOAT //Motion vectors
-#define depthFormat VK_FORMAT_R32_SFLOAT //Depth
 
 constexpr uint32_t RASTER_GBUFFER_SIZE = 6;
 
@@ -108,7 +107,12 @@ constexpr std::array FRAME_IMAGE_FORMATS = {
 	VK_FORMAT_R32_SFLOAT, //Depth (for position reconstruction)
 	VK_FORMAT_R16G16B16A16_SFLOAT, //Normal-roughness
 	VK_FORMAT_R16G16_SFLOAT, //Motion vectors
-	VK_FORMAT_D32_SFLOAT //hardware depth
+	VK_FORMAT_D32_SFLOAT, //hardware depth
+
+	VK_FORMAT_R8G8B8A8_UNORM, //Diffuse albedo
+	VK_FORMAT_R8G8B8A8_UNORM, //Specular albedo
+	VK_FORMAT_R16_SFLOAT, //Specular hit distance
+	VK_FORMAT_R16G16B16A16_SFLOAT //DLSS Output image
 	//Other images here
 };
 
@@ -237,36 +241,8 @@ private:
 
 	std::array<FrameImages, FRAME_IMAGE_SETS> _frameImages;
 
-	AllocatedImage _diffuseAlbedoImage;
-	AllocatedImage _specularAlbedoImage;
-	AllocatedImage _normalRoughnessImage;
-	AllocatedImage _viewDepthImage;
-	AllocatedImage _motionVectorImage;
-	AllocatedImage _specHitDistImage;
-	AllocatedImage _dlssOutputImage;
-	AllocatedImage _orcaAlbedoImage;
-	AllocatedImage _posImage;
-	AllocatedImage _postInputImage;
-	AllocatedImage _depthImage;
-
-	VkImageViewCreateInfo _diffuseAlbedoImageInfo{};
-	VkImageViewCreateInfo _specularAlbedoImageInfo{};
-	VkImageViewCreateInfo _normalRoughnessImageInfo{};
-	VkImageViewCreateInfo _viewDepthImageInfo{};
-	VkImageViewCreateInfo _motionVectorImageInfo{};
-	VkImageViewCreateInfo _specHitDistImageInfo{};
-	VkImageViewCreateInfo _dlssOutputImageInfo{};
-	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
-	VkImageViewCreateInfo _postInputImageInfo{};
-	VkImageViewCreateInfo _depthImageInfo{};
-
 	//GPU hash maps
 	std::vector<HashMap> _hashMaps;
-
-	AllocatedBuffer _hashMapCheckSumBuffer{};
-	AllocatedBuffer _hashMapValuesBuffer{};
-	AllocatedBuffer _hashMapCountsBuffer{};
-	AllocatedBuffer _hashMapUniformBuffer{};
 
 	std::chrono::steady_clock::time_point _start;
 	// SHaRC cache. Same entry count in every buffer; hash keys are 8 bytes and the
@@ -299,15 +275,9 @@ private:
 	void destroySwapChain();
 	void initSwapChainDescriptors();
 
-	void createRadianceImage();
-	void initRadianceImageDescriptors();
-
 	void createFrameImages();
 	void destroyFrameImages();
-
-	void createDLSSImages();
-	void destroyDLSSImages();
-	void initDLSSImageDescriptors();
+	void initFrameImageDescriptors();
 
 	void initCommandResources();
 	void initSyncStructures();

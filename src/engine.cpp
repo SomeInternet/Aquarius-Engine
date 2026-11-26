@@ -66,6 +66,20 @@ static VkDescriptorSetAndBindingMappingEXT pushAddressMapping(uint32_t binding, 
 	return mapping;
 }
 
+static VkDescriptorSetAndBindingMappingEXT frameImageMapping(uint32_t binding, uint32_t set, VkSpirvResourceTypeFlagsEXT mask, VkDeviceSize pushOffset, VkDeviceSize heapOffset, VkDeviceSize heapArrayStride) {
+	VkDescriptorSetAndBindingMappingEXT mapping{ .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT };
+	mapping.descriptorSet = set;
+	mapping.firstBinding = binding;
+	mapping.bindingCount = 1;
+	mapping.resourceMask = mask;
+	mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
+	mapping.sourceData.pushIndex.pushOffset = pushOffset;
+	mapping.sourceData.pushIndex.heapOffset = heapOffset;
+	mapping.sourceData.pushIndex.heapIndexStride = FRAME_IMAGE_FORMATS.size() * heapArrayStride;
+	mapping.sourceData.pushIndex.heapArrayStride = heapArrayStride; //Declares the stride between elements in a descriptor array (the declaration in the shader completes the declaration as an array
+	return mapping;
+}
+
 void Engine::initWindow() {
 	SDL_Init(SDL_INIT_VIDEO);
 
@@ -355,22 +369,6 @@ void Engine::initSwapChainDescriptors() {
 	_allocator.flush(_imageHeap);
 }
 
-void Engine::createRadianceImage() {
-	VkExtent3D extent = VkExtent3D(_renderExtent.width, _renderExtent.height, 1);
-
-	_radianceImage = _allocator.createImage(extent, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-		false, &_radianceImageViewCreateInfo);
-
-	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
-		util::transitionImageLayout(commandBuffer, _radianceImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-		});
-}
-
-void Engine::initRadianceImageDescriptors() {
-	writeImageDescriptor(0, _radianceImageViewCreateInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-	_allocator.flush(_imageHeap);
-}
-
 void Engine::createFrameImages() {
 	VkExtent3D extent = VkExtent3D(_renderExtent.width, _renderExtent.height, 1);
 
@@ -378,13 +376,19 @@ void Engine::createFrameImages() {
 	VkImageUsageFlags gbufferUsage = debugViewUsage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
 	for (auto &frame : _frameImages) {
-		frame._radianceScoreImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[0], gbufferUsage, false, nullptr);
+		frame._radianceScoreImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[0], gbufferUsage, false, &frame._radianceScoreImageInfo);
 		frame._albedoEmissionImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[1], gbufferUsage, false, &frame._albedoEmissionImageInfo);
-		frame._metallicTransmissionIorImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[2], gbufferUsage, false, nullptr);
+		frame._metallicTransmissionIorImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[2], gbufferUsage, false, &frame._metallicTransmissionIorImageInfo);
 		frame._linearDepthImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[3], gbufferUsage, false, &frame._linearDepthImageInfo);
 		frame._normalRoughnessImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[4], gbufferUsage, false, &frame._normalRoughnessImageInfo);
 		frame._motionVectorImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[5], gbufferUsage, false, &frame._motionVectorImageInfo);
-		frame._hardwareDepthImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[6], VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, nullptr);
+		frame._hardwareDepthImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[6], VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &frame._hardwareDepthImageInfo);
+
+		//DLSS Images (Okay I mean, I guess the motion vector image is also a DLSS image but...uh...hey look, I don't have to explain myself to you!)
+		frame._diffuseAlbedoImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[7], debugViewUsage, false, &frame._diffuseAlbedoImageInfo);
+		frame._specularAlbedoImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[8], debugViewUsage, false, &frame._specularAlbedoImageInfo);
+		frame._specHitDistImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[9], VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &frame._specHitDistImageInfo);
+		frame._dlssOutputImage = _allocator.createImage(extent, FRAME_IMAGE_FORMATS[10], VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &frame._dlssOutputImageInfo);
 
 		//TODO: Initialize other images...
 	}
@@ -392,7 +396,8 @@ void Engine::createFrameImages() {
 	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
 		for (auto &frame : _frameImages) {
 			for (VkImage image : { frame._radianceScoreImage.image, frame._albedoEmissionImage.image, frame._metallicTransmissionIorImage.image,
-				frame._linearDepthImage.image, frame._normalRoughnessImage.image, frame._motionVectorImage.image }) {
+				frame._linearDepthImage.image, frame._normalRoughnessImage.image, frame._motionVectorImage.image,
+				frame._diffuseAlbedoImage.image, frame._specularAlbedoImage.image, frame._specHitDistImage.image, frame._dlssOutputImage.image /*Add other images here*/}) {
 				util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 			}
 		}
@@ -408,61 +413,33 @@ void Engine::destroyFrameImages() {
 		_allocator.destroyImage(frame._normalRoughnessImage);
 		_allocator.destroyImage(frame._motionVectorImage);
 		_allocator.destroyImage(frame._hardwareDepthImage);
+
+		_allocator.destroyImage(frame._diffuseAlbedoImage);
+		_allocator.destroyImage(frame._specularAlbedoImage);
+		_allocator.destroyImage(frame._specHitDistImage);
+		_allocator.destroyImage(frame._dlssOutputImage);
 	}
 }
 
-void Engine::createDLSSImages() {
-	VkExtent3D extent = VkExtent3D(_renderExtent.width, _renderExtent.height, 1);
-	
-	//TRANSFER_SRC so the debug view can blit these directly into the swap chain
-	constexpr VkImageUsageFlags debugViewUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+void Engine::initFrameImageDescriptors() {
+	//Each frame image set occupies FRAME_IMAGE_FORMATS.size() consecutive slots, in FRAME_IMAGE_FORMATS order
+	for (uint32_t i = 0; i < FRAME_IMAGE_SETS; ++i) {
+		FrameImages &frame = _frameImages[i];
+		const uint32_t base = i * static_cast<uint32_t>(FRAME_IMAGE_FORMATS.size());
 
-	_diffuseAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_diffuseAlbedoImageInfo);
-	_specularAlbedoImage = _allocator.createImage(extent, VK_FORMAT_R8G8B8A8_UNORM, debugViewUsage, false, &_specularAlbedoImageInfo);
-	constexpr VkImageUsageFlags gbufferUsage = debugViewUsage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-	_normalRoughnessImage = _allocator.createImage(extent, normalRoughnessFormat, gbufferUsage, false, &_normalRoughnessImageInfo);
-	_viewDepthImage = _allocator.createImage(extent, depthFormat, gbufferUsage, false, &_viewDepthImageInfo);
-	_motionVectorImage = _allocator.createImage(extent, motionVectorsFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, false, &_motionVectorImageInfo);
-	_specHitDistImage = _allocator.createImage(extent, VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_specHitDistImageInfo);
-	_dlssOutputImage = _allocator.createImage(extent, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_dlssOutputImageInfo);
-	_orcaAlbedoImage = _allocator.createImage(extent, albedoMetallicFormat, gbufferUsage, false, &_orcaAlbedoImageInfo);
-	_posImage = _allocator.createImage(extent, posFormat, gbufferUsage, false, nullptr);
-	_depthImage = _allocator.createImage(extent, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, false, &_depthImageInfo);
-	//TODO: Create additional images for DLSS (might want too look into the depth of field guide)
-
-	//The shaders write these as storage images, so keep them in GENERAL
-	_allocator.immediateSubmit([&](VkCommandBuffer commandBuffer) {
-		for (VkImage image : { _diffuseAlbedoImage.image, _specularAlbedoImage.image, _normalRoughnessImage.image, _viewDepthImage.image,
-			_motionVectorImage.image, _specHitDistImage.image, _dlssOutputImage.image, _orcaAlbedoImage.image, _posImage.image }) {
-			util::transitionImageLayout(commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-		}
-		});
-}
-
-void Engine::destroyDLSSImages() {
-	_allocator.destroyImage(_diffuseAlbedoImage);
-	_allocator.destroyImage(_specularAlbedoImage);
-	_allocator.destroyImage(_normalRoughnessImage);
-	_allocator.destroyImage(_viewDepthImage);
-	_allocator.destroyImage(_motionVectorImage);
-	_allocator.destroyImage(_specHitDistImage);
-	_allocator.destroyImage(_dlssOutputImage);
-	_allocator.destroyImage(_orcaAlbedoImage);
-	_allocator.destroyImage(_posImage);
-	_allocator.destroyImage(_depthImage);
-	//_allocator.destroyImage(_postInputImage);
-}
-
-void Engine::initDLSSImageDescriptors() {
-	writeImageDescriptor(1, _diffuseAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-	writeImageDescriptor(2, _specularAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-	writeImageDescriptor(3, _normalRoughnessImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-	writeImageDescriptor(4, _viewDepthImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-	writeImageDescriptor(5, _motionVectorImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-	writeImageDescriptor(6, _specHitDistImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-	writeImageDescriptor(7, _dlssOutputImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-	writeImageDescriptor(8, _orcaAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 0, frame._radianceScoreImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 1, frame._albedoEmissionImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 2, frame._metallicTransmissionIorImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 3, frame._linearDepthImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 4, frame._normalRoughnessImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 5, frame._motionVectorImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		//D32 can't be a storage image, so the hardware depth slot holds a sampled descriptor
+		writeImageDescriptor(base + 6, frame._hardwareDepthImageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+		writeImageDescriptor(base + 7, frame._diffuseAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 8, frame._specularAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 9, frame._specHitDistImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 10, frame._dlssOutputImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+	}
 	_allocator.flush(_imageHeap);
 }
 
@@ -723,11 +700,12 @@ void Engine::initPipelinePathtracer() {
 	VkShaderModule modulePathtracer = util::loadShaderModule("./build/shaders/pathtracer.spv", _device);
 
 	VkDeviceSize imageStride = _imageHeapLayout.stride;
+	constexpr uint32_t imageSetOffset = offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, imageSet);
 
 	//Create the bindings for the resources
 	std::array mappings = {
 		//Set 0 is for SHaRC
-		heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
+		frameImageMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 0 * imageStride, imageStride), //Radiance-score
 		heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
 		heapMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
 		pushAddressMapping(3, 0, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
@@ -737,15 +715,15 @@ void Engine::initPipelinePathtracer() {
 		pushAddressMapping(7, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
 		pushAddressMapping(8, 0, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, configAddress)),
 		pushAddressMapping(9, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
-		//Set 1 is for the DLSS/ORCA images
-		heapMapping(0, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 1 * imageStride, 0), //Diffuse albedo
-		heapMapping(1, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 2 * imageStride, 0), //Specular albedo
-		heapMapping(2, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 3 * imageStride, 0), //Normal/roughness
-		heapMapping(3, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 4 * imageStride, 0), //Depth
-		heapMapping(4, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 5 * imageStride, 0), //Motion vectors
-		heapMapping(5, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 6 * imageStride, 0), //Specular hit distance
-		heapMapping(6, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 7 * imageStride, 0), //DLSS output
-		heapMapping(7, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 8 * imageStride, 0), //ORCA albedo
+		//Set 1 is for the DLSS/ORCA images; heap offsets are slots within a frame image set (FRAME_IMAGE_FORMATS order)
+		frameImageMapping(0, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 7 * imageStride, imageStride), //Diffuse albedo
+		frameImageMapping(1, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 8 * imageStride, imageStride), //Specular albedo
+		frameImageMapping(2, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 4 * imageStride, imageStride), //Normal/roughness
+		frameImageMapping(3, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 3 * imageStride, imageStride), //Linear depth
+		frameImageMapping(4, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 5 * imageStride, imageStride), //Motion vectors
+		frameImageMapping(5, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 9 * imageStride, imageStride), //Specular hit distance
+		frameImageMapping(6, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 10 * imageStride, imageStride), //DLSS output
+		frameImageMapping(7, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 1 * imageStride, imageStride), //Albedo-emission (was ORCA albedo)
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
@@ -846,10 +824,11 @@ void Engine::initPipelineUpdate() {
 	VkShaderModule moduleUpdate = util::loadShaderModule("./build/shaders/sparse.spv", _device);
 
 	VkDeviceSize imageStride = _imageHeapLayout.stride;
+	constexpr uint32_t imageSetOffset = offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, imageSet);
 
 	//Create the bindings for the resources
 	std::array mappings = {
-		heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0), //Radiance Image
+		frameImageMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 0 * imageStride, imageStride), //Radiance-score
 		heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, (ENGINE_IMAGES + MAX_SWAPCHAIN_SIZE + HDR_IMAGES) * imageStride, imageStride), //Scene images
 		heapMapping(2, 0, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT, 0, _samplerHeapLayout.stride), //Samplers
 		pushAddressMapping(3, 0, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, tlas)), //Tlas
@@ -1419,7 +1398,7 @@ void Engine::initPipelinePost() {
 	VkDeviceSize imageStride = _imageHeapLayout.stride;
 
 	std::array mappings = {
-	heapMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, 0 * imageStride, 0),
+	frameImageMapping(0, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, offsetof(PushConstantsPost, imageSet), 0 * imageStride, imageStride), //Radiance-score
 	heapMapping(1, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, ENGINE_IMAGES * imageStride, imageStride)
 	};
 
@@ -1943,6 +1922,7 @@ void Engine::draw() {
 	_pcpt.totalFrames = _totalFrames;
 	_pcpt.hashMap = hashMap.hashMapUniformBuffer.address;
 	_pcpt.sparsePixels = getCurrFrame()._sparsePixelBuffer.address;
+	_pcpt.imageSet = _totalFrames % FRAME_IMAGE_SETS; //Same set the raster pass wrote this frame
 
 	SharcConfig config{};
 	config.sceneScale = _sharcSceneScale;
@@ -1993,6 +1973,7 @@ void Engine::draw() {
 		// For B8G8R8A8 that channel is blue, so the post shader swaps R and B.
 		pcp.swapRedBlue = _swapChainImageFormat == VK_FORMAT_B8G8R8A8_UNORM ? 1 : 0;
 		pcp.flags = static_cast<EngineStateFlags>(flags);
+		pcp.imageSet = _totalFrames % FRAME_IMAGE_SETS; //Read the radiance the pathtracer wrote this frame
 
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelinePost);
 		VkPushDataInfoEXT pushDataPost{ .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT };
@@ -2116,16 +2097,7 @@ void Engine::resize() {
 
 	destroyFrameImages();
 	createFrameImages();
-
-
-	_allocator.destroyImage(_radianceImage);
-	createRadianceImage();
-	initRadianceImageDescriptors();
-
-	//Destroy and recreate the DLSS images
-	destroyDLSSImages();
-	createDLSSImages();
-	initDLSSImageDescriptors();
+	initFrameImageDescriptors();
 
 	_frameNum = 0;
 	_resize = false;
@@ -2154,14 +2126,11 @@ void Engine::init() {
 
 	updateRenderExtent();
 	createFrameImages();
-	createRadianceImage();
-	createDLSSImages();
 	initDescriptorHeaps();
 
 	loadHdrImage("./hdrs/kloofendal_48d_partly_cloudy_puresky_4k.hdr");
 	initSwapChainDescriptors();
-	initRadianceImageDescriptors();
-	initDLSSImageDescriptors();
+	initFrameImageDescriptors();
 
 	_loaded = true;
 
@@ -2237,9 +2206,7 @@ void Engine::cleanup() {
 
 		destroySwapChain();
 		destroyFrameImages();
-		destroyDLSSImages();
 		if (_hdrLoaded) _allocator.destroyImage(_hdrImage);
-		_allocator.destroyImage(_radianceImage);
 
 		_deletionQueue.flush();
 

@@ -165,6 +165,8 @@ struct PushConstantsPathtracer {
     int heatMapLod;
 
     SparsePixelList *sparsePixels;
+
+    uint32_t imageSet; // Frame image set selected by the heap push-index mappings
 };
 
 struct VkInstance {

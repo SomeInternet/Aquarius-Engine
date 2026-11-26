@@ -10,6 +10,7 @@ struct PushConstants {
     uint32_t outputImageIdx;
     uint32_t swapRedBlue;
     EngineStateFlags flags;
+    uint32_t imageSet; // Frame image set selected by the heap push-index mappings
 };
 
 [vk::push_constant]
