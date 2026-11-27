@@ -6,16 +6,24 @@
 #include <stb_image.h>
 #include <tiny_gltf.h>
 #include <vk_mem_alloc.h>
+#include <iostream>
+#include <stdexcept>
 #include "engine.h"
 
 int main(int argc, char *argv[]) {
 	Engine engine;
 
-	engine.init();
+	try {
+		engine.init();
 
-	engine.run();
+		engine.run();
 
-	engine.cleanup();
+		engine.cleanup();
+	}
+	catch (const std::exception &e) {
+		std::cerr << e.what() << std::endl;
+		return 1;
+	}
 
 	return 0;
 }

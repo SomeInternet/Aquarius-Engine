@@ -17,7 +17,7 @@ void util::transitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, V
     imageBarrier.newLayout = newLayout;
 
     //Access the depth compononent of the image if it's supposed to be a depth attachment, else access the color
-    VkImageAspectFlags aspectMask = (newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    VkImageAspectFlags aspectMask = (newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL || newLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     imageBarrier.subresourceRange = init::imageSubresourceRange(aspectMask); //Target the part of the image
     imageBarrier.image = image;
 

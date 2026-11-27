@@ -117,3 +117,23 @@ struct SparsePixelList {
 	uint32_t count;
 	SparsePixel pixels[SPARSE_PIXEL_CAPACITY];
 };
+
+struct DepthPushConstants {
+	VkDeviceAddress cam;
+	VkDeviceAddress instances;
+	VkDeviceAddress posBuffer;
+	int instanceIdx;
+};
+
+struct RasterPushConstants {
+	VkDeviceAddress cam;
+	VkDeviceAddress materials;
+	VkDeviceAddress instances;
+	VkDeviceAddress prevInstances;
+
+	VkDeviceAddress posBuffer;
+	VkDeviceAddress vertBuffer;
+
+	int materialIdx;
+	int instanceIdx;
+};

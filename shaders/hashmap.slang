@@ -18,8 +18,8 @@
 #define SEARCH_LENGTH 100
 #define NUM_HASH_MAP_ENTRIES 2073600
 
-#define RADIANCE_CONVERSION_SCALE 100
-#define MAX_SAMPLE_RADIANCE 327.f
+#define RADIANCE_CONVERSION_SCALE 1000
+#define MAX_SAMPLE_RADIANCE (1u << 20)
 
 enum HashMapResult {
     ENTRY_UNALLOCATED, ENTRY_FOUND, ENTRY_NOT_FOUND,
@@ -42,10 +42,10 @@ inline uint64_t hash(uint64_t sK)
 // Quantizes direction, though it's left to the user to compress it down into the actual proper size afterwards. The quantized direction
 //goes into the LSB.
 //  TODO jitter
-inline uint32_t quantizeDir(float3 dir) {
+inline uint32_t quantizeDir(float3 dir, int lod) {
     half2 oDir = toOctahedral(dir);
     oDir = (oDir + 1.h) / 2.h;
-    uint2 qiDir = min(uint2(oDir * (1 << DIR_QUANTIZATION_BITS)), uint2((1 << DIR_QUANTIZATION_BITS) - 1));
+    uint2 qiDir = min(uint2(oDir * (1 << DIR_QUANTIZATION_BITS)), uint2((1 << DIR_QUANTIZATION_BITS) - 1)) >> ((lod - MIN_LOD) / 2);
     return (qiDir.x << DIR_QUANTIZATION_BITS) | qiDir.y;
 }
 
@@ -63,7 +63,7 @@ inline uint64_t quantize(float3 dir, float3 pos, int lod, bool heatMapDebug = fa
     // Layout would be (subject to change)
     //  DIRECTION (8 bits) | POSITION (48 bits) | lod (8 bits)
     //Don't quantize dir if we're doing a heat map debug view (we just want to see the voxels)
-    return ((heatMapDebug) ? (uint64_t(0xff) << 56) : (uint64_t(quantizeDir(dir)) << 56)) | (quantizePos(pos, lod) << 8) | uint64_t(lod - MIN_LOD);
+    return ((heatMapDebug) ? (uint64_t(0xff) << 56) : (uint64_t(quantizeDir(dir, lod)) << 56)) | (quantizePos(pos, lod) << 8) | uint64_t(lod - MIN_LOD);
 }
 
 inline void hashVertex(float3 dir, float3 pos, int lod, inout uint32_t startAddress, inout uint32_t checkSum, bool heatMapDebug = false) {
@@ -97,8 +97,7 @@ HashMapResult insert(uint32_t *checkSums, uint3 *radiances, uint32_t *counts,
         // Atomically update value, counter
         InterlockedCompareExchange(checkSums[finalAddress], HASHMAP_UNALLOCATED, checkSum, mapValue);
         if (mapValue == HASHMAP_UNALLOCATED || mapValue == checkSum) {
-            // uint3 radianceInt = round(clamp(radiance * RADIANCE_CONVERSION_SCALE, float3(0.f), float3(32767.f)));
-            uint3 radianceInt = round(clamp(radiance, float3(0.f), float3(MAX_SAMPLE_RADIANCE)) * RADIANCE_CONVERSION_SCALE);
+            uint3 radianceInt = ceil(clamp(radiance * RADIANCE_CONVERSION_SCALE, float3(0.f), float3(MAX_SAMPLE_RADIANCE)));
 
             // Prone to overflow, we should examine if it's an issue and address it potentially
             if (radianceInt.x > 0) InterlockedAdd(radiances[finalAddress].x, radianceInt.x);
