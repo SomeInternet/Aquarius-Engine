@@ -5,7 +5,7 @@
 
 #define BLOCK_X 8
 #define BLOCK_Y 8
-#define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
+#define GROUP_SIZE (BLOCK_X * BLOCK_Y)
 
 // matching writeImageDesciptor
 #define IMG_NORMAL_ROUGHNESS 3
@@ -57,14 +57,68 @@ inline float3 viewDirFromPixel(uint2 px) {
 };
 
 inline float3 sampleStartingBeta(uint2 px, float3 albedo, float metallic, float roughness,
-                                 float3 normal, float3 view, out bool diffuseOnly) {
-    // TODO
+                                 float3 normal, float3 viewDir, out bool diffuseOnly) {
+    diffuseOnly = false;
+
+    PointInfo pointInfo = {};
+    pointInfo.nor = normal;
+    pointInfo.tan = fallbackTangent(normal);
+
+    float3 wo = normalize(mulNor(pointInfo, viewDir));
+    if (wo.z < EPSILON) {
+        return float3(0.0f);
+    };
+
+    PBR pbr = {};
+    pbr.color = float4(albedo, 1.0f);
+    pbr.metallicRoughness = float2(metallic, roughness);
+    pbr.transmissiveness = 0.0f;
+    pbr.etaA = 1.0f;
+    pbr.etaB = 1.5f;
+
+    // borrowed from path tracer logic
+    seed = pcg2(px) ^ pcg(pc.frameNum);
+    float randomLobe = rand();
+    float2 randomDirection = float2(rand(), rand());
+
+    float fresnel = fDielectric(viewDir, float3(0, 0, 1), pbr.etaA, pbr.etaB).x;
+    float diffuseProb = (1.0f - metallic) * (1.0f - pbr.transmissiveness) * (1.0f - fresnel);
+    diffuseOnly = randomLobe < diffuseProb;
+
+    float3 wi;
+    if (!sampleWi(wo, pbr, randomLobe, randomDirection, wi)) {
+        return float3(0.0f);
+    };
+
+    float3 bsdf;
+    float pdf;
+    evalCookTorrance(wo, wi, pbr, bsdf, pdf);
+    if (pdf <= 0.0f) {
+        return float3(0.0f);
+    };
+
+    float3 beta = bsdf / pdf;
+    return select(isnan(beta), float3(0.f), beta);
+
 };
 
 // ref ORCA slides
 // compute pixel's score based on material prop (albedo, metallic, roughness), normal
 inline float computeScore(uint2 px, float3 albedo, float metallic, float roughness, float3 normal, float3 viewDir) {
-    return 2.0f;
+    if (pc.applySpecularHeuristics == 0) {
+        return pc.thresholdRate;
+    };
+
+    bool diffuseOnly;
+    float3 startingBeta = sampleStartingBeta(px, albedo, metallic, roughness, normal, viewDir, diffuseOnly);
+
+    // heuristic part
+    float betaLum = saturate(max(startingBeta.r, max(startingBeta.g, startingBeta.b)));
+    float fresnelFactor = pow(1.0f - betaLum, 4.0f);
+    float scoreForSparsity = diffuseOnly ? 1.0f : min(roughness, fresnelFactor);
+    float roughnessAdjust = saturate((pc.roughnessMax - scoreForSparsity) / pc.roughnessMax);
+
+    return lerp(pc.thresholdRate, max(pc.mirrorMaxRate, pc.thresholdRate), roughnessAdjust);
 };
 
 // noise for proability in pickPass
@@ -77,7 +131,7 @@ inline float pixelNoise(uint2 px) {
 
 // SCORE + SUM PASS ============================
 
-groupshared float gsWaveSums[BLOCK_SIZE];
+groupshared float gsWaveSums[GROUP_SIZE];
 
 [shader("compute")]
 [numthreads(BLOCK_X, BLOCK_Y, 1)]
@@ -98,7 +152,29 @@ void scorePass(uint2 px: SV_DispatchThreadID, uint groupIndex: SV_GroupIndex) {
         engineImages[IMG_SCORE][px] = float4(score, 0.0f, 0.0f, 0.0f); // uhh is there a way to prevent this
     }
 
-    // TODO: sum things
+    uint laneCount = WaveGetLaneCount();
+    uint waveIndex = groupIndex / laneCount;
+    uint numWaves = (GROUP_SIZE + laneCount - 1) / laneCount;
+
+    float waveSum = WaveActiveSum(score);
+    if (WaveIsFirstLane()) {
+        gsWaveSums[waveIndex] = waveSum;
+    };
+
+    GroupMemoryBarrierWithGroupSync();
+
+    if (groupIndex == 0) {
+        float groupSum = 0.0f;
+        for (uint i = 0; i < numWaves; i++) {
+            groupSum += gsWaveSums[i];
+        }
+
+        uint intifiedSum = uint(groupSum * INTIFIED_SCORE_SCALE + 0.5f);
+        if (intifiedSum > 0) {
+            InterlockedAdd(pc.state->scoreSumIntified, intifiedSum);
+        }
+    }
+
 };
 
 // PICK PASS ==============================
