@@ -34,6 +34,7 @@ public:
 	AllocatedBuffer uploadBuffer(void *data, size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, bool createMapping = true, size_t minAlignment = 0);
 	void destroyBuffer(AllocatedBuffer &buffer);
 
+	void invalidate(const AllocatedBuffer &buffer, VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE);
 	void flush(const AllocatedBuffer &buffer);
 
 	//Images

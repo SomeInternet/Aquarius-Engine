@@ -242,7 +242,7 @@ private:
 	VkImageViewCreateInfo _orcaAlbedoImageInfo{};
 	VkImageViewCreateInfo _postInputImageInfo{};
 	VkImageViewCreateInfo _depthImageInfo{};
-	VKImageViewCreateInfo _scoreImageInfo{};
+	VkImageViewCreateInfo _scoreImageInfo{};
 
 	//GPU hash maps
 	std::vector<HashMap> _hashMaps;
@@ -313,6 +313,7 @@ private:
 	void initPipelineResolve();
 	void initPipelineRaster();
 	void initPipelinePost();
+	void initPipelineSelection();
 
 	void createSharcBuffers();
 	void updateSharc(VkCommandBuffer commandBuffer);
@@ -334,6 +335,7 @@ private:
 	uint32_t _frameNum{ 0 };
 	bool _resize{ false };
 	bool _minimized{ false };
+	uint32_t _sparsePixelCount = 0;
 
 	//Helpers
 	inline FrameResources &getCurrFrame() { return _frameResources[_totalFrames % FRAMES_IN_FLIGHT]; }

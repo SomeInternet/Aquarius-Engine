@@ -1530,8 +1530,8 @@ void Engine::updateSelection(VkCommandBuffer commandBuffer) {
 		VkMemoryBarrier2 barrier{ .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
 		barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 		barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-		barrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-		barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+		barrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_HOST_BIT;
+		barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_HOST_READ_BIT;
 
 		VkDependencyInfo dep{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
 		dep.memoryBarrierCount = 1;
@@ -1565,9 +1565,10 @@ void Engine::createSparsePixelBuffers() {
 	}
 
 	_deletionQueue.push([this]() {
-		for (auto& frame : _frameResources)
+		for (auto& frame : _frameResources) {
 			_allocator.destroyBuffer(frame._sparsePixelBuffer);
 			_allocator.destroyBuffer(frame._selectionStateBuffer);
+		};
 	});
 }
 
@@ -1620,6 +1621,9 @@ void Engine::drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageVie
 	ImGui::Begin("Aquarius Engine Analytics", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
 	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+
+	float budget = float(_renderExtent.width * _renderExtent.height) / 16.f;
+	ImGui::Text("Sparse pixels: %u / %.0f budget (%.1f%%)", _sparsePixelCount, budget, 100.f * _sparsePixelCount / budget);
 
 	//Debug view to make sure the DLSS/GBuffer images are appearing properly
 	std::vector<const char *> debugViewOptions = {"Pathtraced", "Diffuse Albedo", "Specular Albedo", "Normals", "Depth", "ORCA Albedo"};
@@ -1906,6 +1910,9 @@ void Engine::draw() {
 	FrameResources &currFrame = getCurrFrame();
 
 	VK_CHECK(vkWaitForFences(_device, 1, &currFrame._renderFence, true, 1000000000)); //Wait for 1 fence (the fence of the current frame) for up to 1 second
+	
+	_allocator.invalidate(currFrame._sparsePixelBuffer, offsetof(SparsePixelList, count), sizeof(uint32_t));
+	_sparsePixelCount = static_cast<SparsePixelList *>(currFrame._sparsePixelBuffer.info.pMappedData)->count;
 	
 	//Get image from swapchain
 	uint32_t swapChainImageIndex;

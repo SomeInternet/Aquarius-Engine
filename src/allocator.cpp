@@ -108,6 +108,10 @@ void Allocator::flush(const AllocatedBuffer &buffer) {
 	vmaFlushAllocation(_allocator, buffer.allocation, 0, VK_WHOLE_SIZE);
 }
 
+void Allocator::invalidate(const AllocatedBuffer &buffer, VkDeviceSize offset, VkDeviceSize size) {
+	vmaInvalidateAllocation(_allocator, buffer.allocation, offset, size);
+}
+
 AllocatedImage Allocator::createImage(VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, bool mipmaps /*= false*/, VkImageViewCreateInfo *imageViewInfoSave /*= nullptr*/ ) {
 	AllocatedImage newImage;
 	newImage.imageFormat = format;

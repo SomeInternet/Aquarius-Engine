@@ -32,8 +32,8 @@ struct PushConstantsSelection {
     float thresholdRate; // 1/16
     float mirrorMaxRate;
     float roughnessMax; // treat as diffuse if above this factor
-    bool applySpecularHeuristics; // 0 to uniform threshold every pixell
-    bool applyBalancing; // 0 to skip bugeting, just for debugging
+    uint32_t applySpecularHeuristics; // 0 to uniform threshold every pixell
+    uint32_t applyBalancing; // 0 to skip bugeting, just for debugging
 }
 
 [[vk::binding(0, 0)]]
