@@ -40,12 +40,15 @@ struct PushConstantsPathtracer {
 	int32_t heatMapLod{ HASHMAP_MAX_LOD };
 
 	VkDeviceAddress sparsePixels{};
+
+	uint32_t imageSet{ 0 };
 };
 
 struct PushConstantsPost {
 	uint32_t outputImageIdx;
 	uint32_t swapRedBlue;
 	EngineStateFlags flags;
+	uint32_t imageSet{ 0 };
 };
 
 // SHaRC resolve. shaders/resolve.slang PushConstantsResolve must stay in this order:

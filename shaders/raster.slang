@@ -26,11 +26,12 @@ struct GBufferFSInput {
 
 //NOTE: If anyone changes this, make sure to update the color attachment info in the raster pipeline setup!
 struct GBufferFSOutput {
-    [[vk::location(0)]] float4 albedoMetallic : SV_Target0;
-    [[vk::location(1)]] float3 pos : SV_Target1; //Add IOR/Transmissiveness to this and make it a float4?
-    [[vk::location(2)]] float4 normalRoughness : SV_Target2;
-    [[vk::location(3)]] float2 motionVectors : SV_Target3;
-    [[vk::location(4)]] float depth : SV_Target4;
+    [[vk::location(0)]] float4 radianceScore : SV_Target0;
+    [[vk::location(1)]] float4 albedoEmission : SV_Target1;
+    [[vk::location(2)]] float4 metallicTransmissionIor : SV_Target2;
+    [[vk::location(3)]] float depth : SV_Target3;
+    [[vk::location(4)]] float4 normalRoughness : SV_Target4;
+    [[vk::location(5)]] float2 motionVectors : SV_Target5;
 };
 
 //GBuffer albedo image
@@ -78,10 +79,10 @@ GBufferFSOutput fragMain(GBufferFSInput input) {
 
     Material mat = pc.materials[pc.materialIdx];
 
-    output.albedoMetallic.xyz = mat.color.xyz * sampleTex(mat.colorImgIdx, mat.colorSamplerIdx, input.uv, float4(1.f)).xyz;
+    output.albedoEmission.xyz = mat.color.xyz * sampleTex(mat.colorImgIdx, mat.colorSamplerIdx, input.uv, float4(1.f)).xyz;
 
     float2 metallicRoughness = mat.metallicRoughness * sampleTex(mat.metallicRoughnessImgIdx, mat.metallicRoughnessSamplerIdx, input.uv, float4(1.f)).xy;
-    output.albedoMetallic.w = metallicRoughness.x;
+    output.metallicTransmissionIor = float4(metallicRoughness.x, mat.transmissiveness, mat.ior - 1.f, 0.f);
     output.normalRoughness.w = metallicRoughness.y;
 
     float3 nor = normalize(input.nor);
@@ -104,8 +105,34 @@ GBufferFSOutput fragMain(GBufferFSInput input) {
     float2 prevNdc = input.prevClip.xy / input.prevClip.w;
     output.motionVectors = (prevNdc - currNdc) * 0.5f;
 
-    output.pos = input.worldPos;
-    output.depth = length(output.pos - pc.cam->camPos);
+    float3 viewDir = pc.cam->camPos - input.worldPos;
+    output.depth = length(viewDir);
+
+    if (length(mat.emission.rgb) > 0.f) {
+        output.albedoEmission = float4(mat.emission.xyz * sampleTex(mat.emissionImgIdx, mat.emissionSamplerIdx, input.uv, float4(1.f)).xyz, mat.emission.w);
+    } else { // Score computation
+        //
+        float3 startingBeta = envBRDFApprox2(lerp(output.albedoEmission.xyz, float3(.4f), metallicRoughness.x), metallicRoughness.y * metallicRoughness.y, 
+            abs(dot(output.normalRoughness.xyz, normalize(viewDir))));
+
+        // BetaLum is the max channel of the throughput (We don't want to sample emissive surfaces, so we only fill this out where there isn't emission)
+        float betaLum = saturate(max(startingBeta.x, max(startingBeta.y, startingBeta.z)));
+
+        float fresnelFac = (1.f - betaLum);
+        fresnelFac *= fresnelFac;
+        fresnelFac *= fresnelFac;
+
+        float sparsityScore = min(output.normalRoughness.w, fresnelFac);
+
+        float maxRoughnessToAbort = 1.f;
+        float roughnessAdjust = saturate((maxRoughnessToAbort - sparsityScore) / maxRoughnessToAbort);
+        float mirrorMaxRateOfSparsification = 1.f;
+
+        float threshold = lerp(.4f, max(mirrorMaxRateOfSparsification, .4f), roughnessAdjust);
+        output.radianceScore.w = threshold;
+    }
+
+    
 
     return output;
 

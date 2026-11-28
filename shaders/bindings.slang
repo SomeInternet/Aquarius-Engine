@@ -35,32 +35,33 @@ Texture2D<float4> hdrImage;
 
 // Set 0 bindings 5-9 are reserved for the SHaRC buffers
 // G-buffer, DLSS and ORCA images
+
 [vk::binding(0, 1)]
-RWTexture2D<float4> diffuseAlbedoImage;
+Texture2D<float4> albedoEmissionImage;
 
 [vk::binding(1, 1)]
-RWTexture2D<float4> specularAlbedoImage;
+Texture2D<float4> metallicTransmissionIorImage;
 
 [vk::binding(2, 1)]
-RWTexture2D<float4> normalRoughnessImage;
+Texture2D<float> depthImage;
 
 [vk::binding(3, 1)]
-RWTexture2D<float4> depthImage;
+Texture2D<float4> normalRoughnessImage;
 
 [vk::binding(4, 1)]
-RWTexture2D<float4> motionVectorImage;
+Texture2D<float2> motionVectorImage;
 
 [vk::binding(5, 1)]
-RWTexture2D<float4> specHitDistImage;
+RWTexture2D<float4> diffuseAlbedoImage;
 
 [vk::binding(6, 1)]
-RWTexture2D<float4> dlssOutputImage;
+RWTexture2D<float4> specularAlbedoImage;
 
 [vk::binding(7, 1)]
-RWTexture2D<float4> orcaAlbedoImage;
+RWTexture2D<float> specHitDistImage;
 
-//[vk::binding(0, 2)]
-//ConstantBuffer<HashMap> hashMap;
+[vk::binding(0, 2)]
+ConstantBuffer<HashMap> hashMap;
 
 [[vk::push_constant]]
 PushConstantsPathtracer pc;

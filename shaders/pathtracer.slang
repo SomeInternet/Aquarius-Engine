@@ -13,7 +13,11 @@
 // Primary hit read from the raster G-buffer instead of tracing primary rays.
 // World position is reconstructed from the camera ray and the stored ray length.
 struct RasterPrimaryHit {
-    float4 albedoMetallic; // orcaAlbedoImage
+    float3 albedo;
+    float3 emission;
+    float metallic;
+    float transmissiveness;
+    float ior;
     float3 pos; // calculated using camPos + cameraDir * depth
     float4 normalRoughness; // normalRoughnessImage
     float2 motionVectors; // motionVectorImage
@@ -44,10 +48,18 @@ RasterPrimaryHit loadRasterPrimaryHit(uint2 pixel, float2 imageSize) {
     RasterPrimaryHit primary = {};
     primary.cameraDir = pinholeCameraDirection(float2(pixel) + 0.5f, imageSize);
 
-    primary.albedoMetallic = orcaAlbedoImage[pixel];
+    float4 albedoEmission = albedoEmissionImage[pixel];
+    float4 metallicTransmissionIor = metallicTransmissionIorImage[pixel];
+    bool emissive = albedoEmission.w > 0.f;
+    primary.albedo = emissive ? float3(0.f) : albedoEmission.xyz;
+    primary.emission = emissive ? albedoEmission.xyz * albedoEmission.w : float3(0.f);
+    primary.metallic = metallicTransmissionIor.x;
+    primary.transmissiveness = metallicTransmissionIor.y;
+    primary.ior = metallicTransmissionIor.z + 1.f;
+
     primary.normalRoughness = normalRoughnessImage[pixel];
-    primary.motionVectors = motionVectorImage[pixel].xy;
-    primary.depth = depthImage[pixel].x;
+    primary.motionVectors = motionVectorImage[pixel];
+    primary.depth = depthImage[pixel];
 
     primary.normal = primary.normalRoughness.xyz;
     primary.roughness = primary.normalRoughness.w;
@@ -66,7 +78,6 @@ RasterPrimaryHit loadRasterPrimaryHit(uint2 pixel, float2 imageSize) {
 
 // The raster pass replaced the camera ray, so the primary surface is shaded here.
 // Similar to closestHit: a light sample, then a BSDF sample for the next ray.
-// The G-buffer has no IOR or transmission, so this is an opaque surface at the glTF default IOR.
 void samplePrimaryBounce(inout RasterPrimaryHit primary) {
     if (!primary.valid) return;
 
@@ -86,11 +97,11 @@ void samplePrimaryBounce(inout RasterPrimaryHit primary) {
     if (wo.z < EPSILON) return;
 
     PBR pbr = {};
-    pbr.color = float4(primary.albedoMetallic.xyz, 1.f);
-    pbr.metallicRoughness = float2(clamp(primary.albedoMetallic.w, 0.f, 1.f), max(primary.roughness, EPSILON));
-    pbr.transmissiveness = 0.f;
+    pbr.color = float4(primary.albedo, 1.f);
+    pbr.metallicRoughness = float2(clamp(primary.metallic, 0.f, 1.f), max(primary.roughness, EPSILON));
+    pbr.transmissiveness = primary.transmissiveness;
     pbr.etaA = 1.f;
-    pbr.etaB = 1.5f;
+    pbr.etaB = primary.ior;
     // sample 1 light from hit position, evaluate BSDF toward it 
     {
         LightSample ls = sampleLight(pc.sceneData, primary.pos);
@@ -142,6 +153,10 @@ void rayGeneration() {
     float prevRoughness = primary.roughness;
     uint depth = 0; // track bounces (sharc)
 
+    #if SHARC_QUERY
+        SharcParameters params = createSharcParams(pc.camPos, sharcConfigBuffer[0], sharcHashEntries, sharcAccumulation, sharcResolved, sharcLockBuffer);
+    #endif
+
     float3 cachedRadiance = float3(0.f);
     bool hashMapQueried = false;
     float3 dir = primary.bounceDir; // incoming direction of the reconstruction ray
@@ -167,12 +182,10 @@ void rayGeneration() {
 
         if (EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) {
             bool found = false;
-            if (hitObject.IsHit()) {
-                float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
-                if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, dir, hitPos,
-                pc.heatMapLod, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
-                    found = true;
-                }
+            float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
+            if (query(pc.hashMap->checkSumBuffer, pc.hashMap->radianceBuffer, pc.hashMap->countBuffer, NUM_HASH_MAP_ENTRIES, float3(0), primary.pos,
+            pc.heatMapLod, cachedRadiance, pc.flags & EngineStateFlags::GPU_HASH_MAP_HEATMAP) == HashMapResult::ENTRY_FOUND) {
+                found = true;
             }
             if (!found) cachedRadiance = float3(0.f);
         } else if (hitObject.IsHit() && (payload.pdf > 0.f || payload.throughput.b < 0.f)) {
@@ -193,14 +206,44 @@ void rayGeneration() {
             cachedRadiance = select(isnan(cachedRadiance), float3(0.f), cachedRadiance);
         }
 
-        if (hitObject.IsHit()) accumulatedLight += throughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
+        // SHARC is sampled only when the ORCA lookup missed. One bounce, so a SHARC hit ends the path.
+        bool shadedBySharc = false;
+#if SHARC_QUERY
+        if ((EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) == 0 && !hashMapQueried && (pc.flags & EngineStateFlags::SHARC) && hitObject.IsHit() && prevBsdfPdf > 0.f && (payload.throughput.b >= 0.f) && (payload.pdf > 0.f)) {
+            float3 hitPos = ray.Origin + ray.Direction * payload.hitLen;
+            float voxelSize = HashGridGetVoxelSize(HashGridGetLevel(hitPos, params.hashGridParameters), params.hashGridParameters);
+            // cannot be shorter than voxel length
+            bool lengthCheck = payload.hitLen > voxelSize * sqrt(3.f);
 
-        // A negative blue channel means the path ended, on an emitter or the environment
-        if (!hitObject.IsHit() || payload.throughput.b < 0.f) {
-            payload.throughput.b *= -1.f;
-            // MIS weight of the BSDF sample against the chance of light sampling having picked the same point (payload.pdf)
-            float misWeight = prevBsdfPdf > 0.f ? powerHeuristic(1, prevBsdfPdf, 1, payload.pdf) : 1.f;
-            accumulatedLight += throughput * payload.throughput.rgb * misWeight;
+            // cone spread eq from SHARC guide:
+            // 2.0∗ray.length∗sqrt(0.5∗a2/(1−a2)
+            float roughness = prevRoughness;
+            float alphaSq = roughness * roughness * roughness * roughness; // a is material SQUARED
+            bool widthCheck = (2.0f * payload.hitLen * sqrt(0.5f * alphaSq / max(1.0f - alphaSq, 1e-6f))) > voxelSize;
+
+            SharcHitData hitData;
+            hitData.positionWorld = hitPos;
+            hitData.normalWorld = payload.hitNor;
+
+            float3 cacheData;
+            bool getSuccess = SharcGetCachedRadiance(params, hitData, cacheData, false);
+            if (lengthCheck && widthCheck && getSuccess) {
+                accumulatedLight += throughput * cacheData;
+                shadedBySharc = true;
+            }
+        }
+#endif
+
+        if ((EngineStateFlags::GPU_HASH_MAP_HEATMAP & pc.flags) == 0 && !shadedBySharc) {
+            if (hitObject.IsHit()) accumulatedLight += throughput * select(isnan(payload.directLight), float3(0.f), payload.directLight);
+
+            // A negative blue channel means the path ended, on an emitter or the environment
+            if (!hitObject.IsHit() || payload.throughput.b < 0.f) {
+                payload.throughput.b *= -1.f;
+                // MIS weight of the BSDF sample against the chance of light sampling having picked the same point (payload.pdf)
+                float misWeight = prevBsdfPdf > 0.f ? powerHeuristic(1, prevBsdfPdf, 1, payload.pdf) : 1.f;
+                accumulatedLight += throughput * payload.throughput.rgb * misWeight;
+            }
         }
     }
 
