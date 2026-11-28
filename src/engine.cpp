@@ -428,12 +428,11 @@ void Engine::initFrameImageDescriptors() {
 		const uint32_t base = i * static_cast<uint32_t>(FRAME_IMAGE_FORMATS.size());
 
 		writeImageDescriptor(base + 0, frame._radianceScoreImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-		writeImageDescriptor(base + 1, frame._albedoEmissionImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-		writeImageDescriptor(base + 2, frame._metallicTransmissionIorImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-		writeImageDescriptor(base + 3, frame._linearDepthImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-		writeImageDescriptor(base + 4, frame._normalRoughnessImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-		writeImageDescriptor(base + 5, frame._motionVectorImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
-		//D32 can't be a storage image, so the hardware depth slot holds a sampled descriptor
+		writeImageDescriptor(base + 1, frame._albedoEmissionImageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 2, frame._metallicTransmissionIorImageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 3, frame._linearDepthImageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 4, frame._normalRoughnessImageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
+		writeImageDescriptor(base + 5, frame._motionVectorImageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 		writeImageDescriptor(base + 6, frame._hardwareDepthImageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
 		writeImageDescriptor(base + 7, frame._diffuseAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
 		writeImageDescriptor(base + 8, frame._specularAlbedoImageInfo, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_IMAGE_LAYOUT_GENERAL);
@@ -715,15 +714,15 @@ void Engine::initPipelinePathtracer() {
 		pushAddressMapping(7, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, resolvedAddress)),
 		pushAddressMapping(8, 0, VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, configAddress)),
 		pushAddressMapping(9, 0, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT, offsetof(PushDataSharc, lockAddress)),
-		//Set 1 is for the DLSS/ORCA images; heap offsets are slots within a frame image set (FRAME_IMAGE_FORMATS order)
-		frameImageMapping(0, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 7 * imageStride, imageStride), //Diffuse albedo
-		frameImageMapping(1, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 8 * imageStride, imageStride), //Specular albedo
-		frameImageMapping(2, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 4 * imageStride, imageStride), //Normal/roughness
-		frameImageMapping(3, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 3 * imageStride, imageStride), //Linear depth
-		frameImageMapping(4, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 5 * imageStride, imageStride), //Motion vectors
-		frameImageMapping(5, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 9 * imageStride, imageStride), //Specular hit distance
-		frameImageMapping(6, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 10 * imageStride, imageStride), //DLSS output
-		frameImageMapping(7, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 1 * imageStride, imageStride), //Albedo-emission (was ORCA albedo)
+		frameImageMapping(0, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, imageSetOffset, 1 * imageStride, imageStride), //Albedo-emission
+		frameImageMapping(1, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, imageSetOffset, 2 * imageStride, imageStride), //Metallic, transmission, IOR
+		frameImageMapping(2, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, imageSetOffset, 3 * imageStride, imageStride), //Linear depth
+		frameImageMapping(3, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, imageSetOffset, 4 * imageStride, imageStride), //Normal/roughness
+		frameImageMapping(4, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, imageSetOffset, 5 * imageStride, imageStride), //Motion vectors
+		frameImageMapping(5, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 7 * imageStride, imageStride), //Diffuse albedo
+		frameImageMapping(6, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 8 * imageStride, imageStride), //Specular albedo
+		frameImageMapping(7, 1, VK_SPIRV_RESOURCE_TYPE_READ_WRITE_IMAGE_BIT_EXT, imageSetOffset, 9 * imageStride, imageStride), //Specular hit distance
+		pushAddressMapping(0, 2, VK_SPIRV_RESOURCE_TYPE_UNIFORM_BUFFER_BIT_EXT, offsetof(PushDataSharc, pathtracer) + offsetof(PushConstantsPathtracer, hashMap)), //Hash map
 	};
 
 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{ .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT };
